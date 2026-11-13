@@ -1,0 +1,47 @@
+{
+  "sources": [
+    {
+      "library": "statsmodels",
+      "version": "0.14.6",
+      "function": "statsmodels.tsa.stattools.coint",
+      "installed_source_sha256": "7f4ed0db5a9880faefc5e505f02c937a86bf5b776f3c1f5bc684d32ae3b990d6",
+      "method_document": "https://www.statsmodels.org/v0.14.6/generated/statsmodels.tsa.stattools.coint.html"
+    },
+    {
+      "library": "statsmodels",
+      "version": "0.14.6",
+      "function": "statsmodels.tsa.stattools.adfuller",
+      "installed_source_sha256": "d524162dec017f81d8d359741c60152c7064b9c23f6ef61ce65514a016f2ff18",
+      "method_document": "https://www.statsmodels.org/v0.14.6/generated/statsmodels.tsa.stattools.adfuller.html"
+    },
+    {
+      "library": "statsmodels",
+      "version": "0.14.6",
+      "function": "statsmodels.stats.diagnostic.breaks_cusumolsresid",
+      "installed_source_sha256": "f1a757cf8f6dc53fec36f061b4aeeec212660a1e7b6720326ab75bd4c5a8c1a7",
+      "method_document": "https://www.statsmodels.org/v0.14.6/generated/statsmodels.stats.diagnostic.breaks_cusumolsresid.html"
+    },
+    {
+      "library": "statsmodels",
+      "version": "0.14.6",
+      "function": "statsmodels.stats.multitest.multipletests",
+      "installed_source_sha256": "8f648c25b75fd1c8e9e8194be36631f4576e0a87befaf2244ce4f5278fd205da",
+      "method_document": "https://www.statsmodels.org/v0.14.6/generated/statsmodels.stats.multitest.multipletests.html"
+    },
+    {
+      "library": "statsmodels",
+      "version": "0.14.6",
+      "function": "statsmodels.base.model.LikelihoodModelResults.wald_test",
+      "installed_source_sha256": "fb041e8fa26217f2ced4d0f999ab132367ca2066b916fb74c17c65a31343f884",
+      "method_document": "https://www.statsmodels.org/v0.14.6/generated/statsmodels.base.model.LikelihoodModelResults.wald_test.html"
+    },
+    {
+      "library": "statsmodels",
+      "version": "0.14.6",
+      "function": "statsmodels.regression.linear_model.RegressionResults.get_robustcov_results",
+      "installed_source_sha256": "bfcd829317f7d68ada4863c7a23463f4e4bce25d4f71dd38dc175c6987901a77",
+      "method_document": "https://www.statsmodels.org/v0.14.6/generated/statsmodels.regression.linear_model.RegressionResults.get_robustcov_results.html"
+    }
+  ],
+  "note": "Official versioned methods and hashes of installed pinned implementation; no method text or market data copied"
+}
