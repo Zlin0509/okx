@@ -1,0 +1,9 @@
+{
+  "scope": "methods, numerical settings, synthetic tests and dependency lock before statistical implementation",
+  "sha256": {
+    "research/M3B_PROTOCOL.json": "ca7721ee82c856fa99b32821ee7c49a7e3ee211200133c70044ff8fe79173ec8",
+    "research/M3B_SPEC.md": "5c6950513ac6129730fb21db2d4d7afd126887c22e71774606957abf2cd37505",
+    "research/statistics/requirements.in": "1bb0117910f7f4f41b35f72a43ec38810cebe3a08080b9c0075ada8ed5a4d574",
+    "research/statistics/requirements.lock": "079e8a99dd9cf645357657a2dcb7e6c3d2f6ac0e172da49f4abf6f442033ad32"
+  }
+}
