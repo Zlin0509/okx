@@ -230,6 +230,7 @@ def test_low_information_or_singular_data_never_generate_pvalues(sample):
 
 
 def test_numerical_tolerance_never_relaxes_discrete_qualification():
+    assert numerical_reference({"tuple": ("a", "b")}) == {"tuple": ["a", "b"]}
     compare({"p": 0.1 + 1e-10, "permit": False}, {"p": 0.1, "permit": False})
     with pytest.raises(Rejected):
         compare({"p": 0.1, "permit": True}, {"p": 0.1, "permit": False})

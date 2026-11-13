@@ -13,7 +13,7 @@ from pathlib import Path
 
 from ..engine import Rejected
 from ..execution_audit import append, canonical
-from ..synthetic_guard import install
+from ..synthetic_guard import GUARD_SCOPE, install
 from .core import dependencies, digest, evaluate_family, qualified_models
 from .fixtures import asof, family, synthetic_series
 
@@ -90,7 +90,7 @@ def numerical_reference(value):
     # Content hashes over floating statistics differ with BLAS/Python. Compare those numbers directly.
     if isinstance(value, dict):
         return {k: numerical_reference(v) for k, v in value.items() if k != "family_sha256"}
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [numerical_reference(v) for v in value]
     return value
 
@@ -158,7 +158,7 @@ def main(guard_counts=None):
         log = ROOT / "research/runtime/m3b.jsonl"
         append(log, {**common, "event": "start"})
         try:
-            result = {**perform(args.action), "guard_counts": dict(guard)}
+            result = {**perform(args.action), "synthetic_guard": dict(guard), "guard_scope": GUARD_SCOPE}
             if any(guard.values()):
                 raise Rejected("guard_violation", "Guard rejected an unexpected operation")
         except Exception as exc:
@@ -190,3 +190,12 @@ def main(guard_counts=None):
     except Rejected as exc:
         print(f"{exc.code}: {exc}", file=sys.stderr)
         raise SystemExit(2) from None
+    except PermissionError as exc:
+        print(
+            json.dumps(
+                {"synthetic_guard": dict(guard), "guard_scope": GUARD_SCOPE, "guard_error": str(exc)},
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(3) from None

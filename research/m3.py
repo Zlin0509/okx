@@ -21,7 +21,7 @@ from .synthetic_guard import GUARD_SCOPE, install
 ROOT = Path(__file__).resolve().parent.parent
 PARAMS = ROOT / "research/M3_PROTOCOL_R2.json"
 RESULTS = ROOT / "research/results/m3_r2_v2"
-FREEZE = ROOT / "research/M3_R2_SOURCE_FREEZE_GUARD_P2.json"
+FREEZE = ROOT / "research/M3B_SOURCE_FREEZE.json"
 CASES = (
     "convergence",
     "nonconvergence",
