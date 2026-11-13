@@ -2,6 +2,8 @@
 
 可本地运行的合约策略研究与自动执行平台。Python / FastAPI + SQLite + 原生 JavaScript，中文控制台，无外部 CDN。默认 `demo` 环境、离线演练数据源，不需要密钥；接入 OKX 后仍默认模拟盘。
 
+macOS DMG 的安装、签名状态、用户数据位置与验收范围见 [桌面版中文说明](packaging/macos/快速开始.md)。DMG 内置运行时，可直接启动无密钥离线演练；源码 ZIP 需要 uv/Python 环境。桌面包装沿用审查通过的 `0dae104` 业务源码，仅增加离线入口与应用生命周期管理；当前版本尚未重新做真实 OKX 模拟盘联调。
+
 ## 启动
 
 需要 macOS 或 Linux、Python 3.11+、[uv](https://docs.astral.sh/uv/getting-started/installation/)。

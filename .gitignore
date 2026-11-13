@@ -8,3 +8,8 @@ __pycache__/
 data/
 artifacts/
 *.egg-info/
+.packaging-venv/
+build/
+dist/
+*.spec
+!packaging/macos/*.spec
