@@ -152,7 +152,7 @@ def create_app(settings=None, exchange=None):
     @app.get("/api/market")
     def market(
         symbol: Literal["BTC-USDT-SWAP", "ETH-USDT-SWAP"] = "BTC-USDT-SWAP",
-        bar: Literal["1H", "4H", "1D"] = "1H",
+        bar: Literal["1m", "1H", "4H", "1D"] = "1H",
     ):
         spec = StrategySpec(symbol=symbol, bar=bar)
         return {

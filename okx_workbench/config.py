@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 LIVE_ACK = "I_UNDERSTAND_LIVE_TRADING_USES_REAL_FUNDS"
 SYMBOLS = ("BTC-USDT-SWAP", "ETH-USDT-SWAP")
-BARS = {"1H": 3_600_000, "4H": 14_400_000, "1D": 86_400_000}
+BARS = {"1m": 60_000, "1H": 3_600_000, "4H": 14_400_000, "1D": 86_400_000}
 
 
 @dataclass(frozen=True)

@@ -59,7 +59,7 @@ def fixture(symbol="BTC-USDT-SWAP", bar="1H", limit=300, end=None):
     candles = []
     for ts in range(end - limit * step, end, step):
         o, c = price(ts), price(ts + step)
-        prices = [price(t) for t in range(ts, ts + step + 1, BARS["1H"])]
+        prices = [o, c, *[price(t) for t in range(ts, ts + step + 1, BARS["1H"])]]
         candles.append(Candle(ts, o, max(prices) * 1.002, min(prices) * 0.998, c, 100 * step / BARS["1H"]))
     return candles
 

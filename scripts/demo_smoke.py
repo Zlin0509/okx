@@ -404,7 +404,7 @@ def _run(args):
         selected = None
         for symbol in ("BTC-USDT-SWAP", "ETH-USDT-SWAP"):
             info = exchange.instrument(symbol)
-            for bar in ("1H", "4H", "1D"):
+            for bar in ("1m", "1H", "4H", "1D"):
                 candles = engine.candles(symbol, bar)
                 age = (engine.now_ms() - candles[-1].ts - BARS[bar]) / 1000
                 if not 0 <= age <= settings.max_signal_age_seconds:

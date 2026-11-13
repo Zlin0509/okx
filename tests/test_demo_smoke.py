@@ -1,5 +1,7 @@
 import fcntl
+import time
 from argparse import Namespace
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -13,6 +15,13 @@ from scripts import demo_smoke
 
 class SmokeOKX(FakeOKX):
     permissions = "read_only,trade"
+
+    def candles(self, symbol, bar):
+        candles = super().candles(symbol, bar)
+        if bar == "1m":
+            end = int(time.time() // 3600) * 3600000
+            return [replace(c, ts=end - (len(candles) - i) * 60000) for i, c in enumerate(candles)]
+        return candles
 
     def request(self, method, path, *args, **kwargs):
         if path == "/api/v5/account/config":

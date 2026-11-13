@@ -13,3 +13,6 @@ build/
 dist/
 *.spec
 !packaging/macos/*.spec
+
+# Local demo credentials; never commit.
+.secrets/

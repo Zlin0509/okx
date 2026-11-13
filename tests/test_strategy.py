@@ -12,7 +12,7 @@ from okx_workbench.strategy import StrategySpec, backtest, generate, target
     [
         {"fast": 24, "slow": 8},
         {"symbol": "BTC-USD-SWAP"},
-        {"bar": "1m"},
+        {"bar": "2m"},
         {"allocation": float("nan")},
         {"allocation": 0.2},
     ],
@@ -74,3 +74,14 @@ def test_synthetic_timeframes_share_prices_and_contain_hourly_extremes():
     assert daily.close == hourly[-1].close
     assert daily.high >= max(c.high for c in hourly)
     assert daily.low <= min(c.low for c in hourly)
+
+
+def test_minute_candles_are_supported_and_have_valid_endpoints():
+    from okx_workbench.market import fixture
+    from okx_workbench.strategy import validate_candles
+
+    spec = StrategySpec(bar="1m")
+    candles = fixture(spec.symbol, spec.bar)
+    validate_candles(candles, spec.bar)
+    assert candles[-1].ts - candles[-2].ts == 60000
+    assert all(c.low <= min(c.open, c.close) <= max(c.open, c.close) <= c.high for c in candles)

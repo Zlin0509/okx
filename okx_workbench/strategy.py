@@ -21,7 +21,7 @@ class StrategySpec(BaseModel):
     @model_validator(mode="after")
     def validate_spec(self):
         if self.symbol not in SYMBOLS or self.bar not in BARS or self.fast >= self.slow:
-            raise ValueError("仅支持 BTC/ETH USDT 永续与 1H/4H/1D，快均线必须小于慢均线")
+            raise ValueError("仅支持 BTC/ETH USDT 永续与 1m/1H/4H/1D，快均线必须小于慢均线")
         return self
 
 
