@@ -1,0 +1,18 @@
+{
+  "phase": "statistical layer before guard integration",
+  "preregistration_commit": "1c5cc11",
+  "sha256": {
+    "research/M3B_EXPECTED.json": "08254c0330c92e61c63a597fe3f5bbbcd7bfbcc53e7c1745913458f298b4aecd",
+    "research/M3B_PREREGISTRATION.json": "545a11109db32674283de89b7d2df22aeb842b28f1d51d348ce4d86031524fed",
+    "research/M3B_PROTOCOL.json": "ca7721ee82c856fa99b32821ee7c49a7e3ee211200133c70044ff8fe79173ec8",
+    "research/M3B_SPEC.md": "5c6950513ac6129730fb21db2d4d7afd126887c22e71774606957abf2cd37505",
+    "research/statistics/__init__.py": "7add3bcc84690d05e8e8154db38351e386c1da133f8409a5386a0df28cad3e4b",
+    "research/statistics/__main__.py": "e1571c30551cabe7964c30a6fcd2dc126f5e903fc0a2b9f0ef7951dd35d1da58",
+    "research/statistics/core.py": "e556c1c1e24a5a81ca32b94131df8809c4641caada758b23c7f42cee15788a9a",
+    "research/statistics/fixtures.py": "b98085d92bf503e0071057b66bb43ad6f0bd2c4de8494cdc15751688cfe8b563",
+    "research/statistics/requirements.in": "1bb0117910f7f4f41b35f72a43ec38810cebe3a08080b9c0075ada8ed5a4d574",
+    "research/statistics/requirements.lock": "079e8a99dd9cf645357657a2dcb7e6c3d2f6ac0e172da49f4abf6f442033ad32",
+    "research/statistics/runner.py": "5a43862a8833ed837367bc697c79b2e8b2d229bee411b9aa1a7c4eb24417fc7b",
+    "tests/test_research_statistics.py": "67da2659c6a3dbd99f7259894300f752b5e451f91cc1295d9ecf2137a97e656e"
+  }
+}
