@@ -8,7 +8,7 @@ import httpx
 import pytest
 from conftest import FakeOKX
 
-from okx_workbench.config import Settings
+from okx_workbench.config import BARS, Settings
 from okx_workbench.coordination import account_scope, bind_account
 from okx_workbench.execution import Engine
 from okx_workbench.market import OKX, TradingError
@@ -183,11 +183,21 @@ def test_previous_build_abandoned_order_reenters_reconciliation(setup_engine):
 
 
 @pytest.mark.parametrize("stage", ["account", "reserve_commit", "marker_commit", "pre_post"])
+@pytest.mark.parametrize("bar", ["1H", "1m"])
 def test_original_deadline_rechecked_after_slow_preflight_and_each_transaction(
-    setup_engine, monkeypatch, stage
+    setup_engine, monkeypatch, stage, bar
 ):
     engine, store, exchange, sid = setup_engine
-    end = exchange.candles("BTC-USDT-SWAP", "1H")[-1].ts + 3600000
+    candles = exchange.candles("BTC-USDT-SWAP", "1H")
+    end = candles[-1].ts + 3600000
+    if bar == "1m":
+        candles = [replace(c, ts=end - (len(candles) - i) * BARS[bar]) for i, c in enumerate(candles)]
+        monkeypatch.setattr(exchange, "candles", lambda *args: candles)
+        with store.connect() as db:
+            db.execute(
+                "UPDATE strategies SET spec=? WHERE id=?",
+                (json.dumps(StrategySpec(bar=bar).model_dump()), sid),
+            )
     now = end + 299000
     monkeypatch.setattr(engine, "now_ms", lambda: now)
     original_account, original_locked = exchange.account, store.locked
