@@ -1,17 +1,15 @@
-# ZLIN-11 仅代码交付
+# ZLIN-11 M3 R2 仅代码合成复现
 
-本分支只包含离线研究代码、明确标注的合成算例和测试；不含 OKX 原始快照、真实窗口结果或包含这些数据的父提交。它从功能基线 `d67cfd2` 重新构建，并检查完整可达历史。
-
-Python 3.11+ 无依赖、无网络算术核验：
+在仓库根目录运行（Linux Python 3.11+ 标准库）：
 
 ```bash
-python3 -m research.m2 unit
+python3 -m research.m3 verify
 ```
 
-R2 计算规则见 `M2_PROTOCOL_R2.json`，测试规格见 `M2_R2_TEST_SPEC.md`；controlled_base 和 code_base 分开记录。真实计算入口本轮禁用。
+只有合成数据生成、只读时点快照、信号／组合和 R2 账本接口，没有真实市场历史。定义／逐项整改及限制见 `M3_R2_PLAN.md` 和 `M3_R2_IMPLEMENTATION.md`。`python3 -m research.m3 real` 无条件拒绝。
 
-这不是策略收益或完整研究验收。缺受控快照运行 `python3 -m research.verify_m2` 或 `python3 -m research.m2 verify` 会退出 2，明确报 `controlled_snapshot_required`。不自动下载数据，不把缺数据视为通过。
+完整 mock 回归：`python3 -m research.synthetic_guard pytest -q`（先按项目安装开发依赖）。CI 使用这条命令及 M3 verify，不执行真实缓存审计。本轮本地测试与 GitHub CI 状态分开披露。
 
-M2 CLI 在被 Git 忽略的 `research/runtime/` 追加 UTC／HEAD／argv／源与结果哈希日志；本地日志不是外部认证或全局不可重跑保证。仅代码 CI 只验证应用及合成算例，真实覆盖验收另行保留。
+资格未知拒绝，正式协整／ADF／稳定性和真实训练／样本外未完成。合成黄金期望仅是合成输出的 SHA／字节数，可以与受控版的合成 manifest 共享 blob；它与原始数据隔离是两个审计口径。全部历史与最终 bundle 对象仍须通过私有数据 blob 交集为 0 的检查。
 
-M3 合成接口复现：`python3 -m research.m3 verify`（标准库，无需受控数据）。定义见 `M3_DESIGN.md`，范围／勘误及版本记录见 `M3_IMPLEMENTATION_NOTES.md`。V2 黄金哈希与受控版相同；真实入口 `python3 -m research.m3 real` 无条件拒绝。
+本分支从安全 1e9681d 继续，保留旧源与冻结，不继承受控快照／真实结果／审计目录。没有授权公开受控 bundle。本地 CLI 日志只证明其自身记录，不是安全沙箱或外部认证。

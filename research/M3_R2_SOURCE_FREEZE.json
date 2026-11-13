@@ -1,0 +1,31 @@
+{
+  "code_base": "1e9681d",
+  "controlled_base": "5bf6adc",
+  "note": "Only synthetic outputs and source files hashed; no M1 cache or legacy controlled verification invoked",
+  "preregistration_commit": "a33d6c0",
+  "sha256": {
+    ".github/workflows/test.yml": "0851bba733a90224eb665f21b52033418da74d2dcfed2bd7a5c6363ce4bb2d76",
+    "pyproject.toml": "8f564d1887bcd54ecae037085a1ecf4895bde11b73a0d0db76c12d79a6aa508c",
+    "research/M3_DESIGN.md": "07c797c17e08f4d16ad9bcbb1190a0834f43c6e713af122f1f36ba244f3b5d48",
+    "research/M3_PREREGISTRATION.json": "a6fdd89b95766deff7557ec325eae6abbc85e53cb7745779420a77685acfdf2d",
+    "research/M3_PROTOCOL.json": "5f79ea5cd883f918a1a33f3ef877b74b97d3e3941b013c185d0507fc3a5e113a",
+    "research/M3_PROTOCOL_R2.json": "7bf247ccf7715d9cb81cfcff67c307aa2872409018b57e32a3a03b9efd61d241",
+    "research/M3_R2_EXPECTED.json": "d6556385cb7adc3a401fe4f6f585af5d8880c888a6fb7984c0f9c9ecb8b3642b",
+    "research/M3_R2_IMPLEMENTATION.md": "9608a0cafb2b7b8ecd8b2f4ddec44feeb670c81ee90eb051217d4f3485a19234",
+    "research/M3_R2_PLAN.md": "960b05393a6eb498d3bcd3e83a5ab09fd27d85f83007f82ae3503eb4a2b0862d",
+    "research/M3_R2_PREREGISTRATION.json": "3ca21d8213a74f3032f45f537eb3d6080453cf86df5207b565532911c94500c9",
+    "research/causal.py": "b55645ea8f81ac00bbbdd7afc3ce4c2fd47994b51e6f12eb21bd14a7f9d2ee06",
+    "research/decision_view.py": "b66e795c09317e7be77ba415e06f7c5856312c3da464107079dddaee042d7fbf",
+    "research/engine.py": "918bde3f2dcd3fd2efed1c909765b6514b0d823a57be36511cc2cbd8ab8859e2",
+    "research/execution_audit.py": "38b38256b496d3516264fa5b52cce5924bbdc93e15d6d6666df6d6ca01dcc26d",
+    "research/m3.py": "779a1ca7ae82e5c8f22794b1158fd61ca42d2015866ee50b52cbfabe2343fa83",
+    "research/m3_audit.py": "04ba11ecd2c8800184c92e619c4497367c4265ec87e8dfb57c4c609e68b3f4be",
+    "research/portfolio.py": "d2832f8a5312d3c3d0ec9123d9093f62e86bbb1b65da3d1b5a4fea441ad7d535",
+    "research/risk_trace.py": "e8086048c17ebefc07de768f5a9ac38bd8f1333dc9b659c5432eb6011d292894",
+    "research/spreads.py": "7086bad4560682e7d3f981c614b0dbb574e29eb4f1fb6134703c96efdd64fd8c",
+    "research/synthetic_guard.py": "03ede58906510a39d1a6bd29ba4bb418a03539a9a363c2a6516cc4c5b990fdf6",
+    "tests/test_research_m3.py": "9db4cb8bed35fc1e2444a9175c87fdb3846d7eba1a06ea132e79279501d5567b",
+    "tests/test_research_m3_r2.py": "240fa20ca45e493bb4dda21fb40539fe89041a9d85672b5cd54a1ab33344ee1e"
+  },
+  "version": "M3-R2-immutable-public-interface"
+}

@@ -14,12 +14,14 @@ from .causal import CausalEngine
 from .engine import Costs, Frame, Market, Rejected, number, serializable
 from .m3_audit import audited
 from .portfolio import DAY, Portfolio, Relation, holding_periods
+from .risk_trace import exposure_trace
 from .spreads import Observation, Qualification
+from .synthetic_guard import install
 
 ROOT = Path(__file__).resolve().parent.parent
-PARAMS = ROOT / "research/M3_PROTOCOL.json"
-RESULTS = ROOT / "research/results/m3_v2"
-FREEZE = ROOT / "research/M3_SOURCE_FREEZE_V2.json"
+PARAMS = ROOT / "research/M3_PROTOCOL_R2.json"
+RESULTS = ROOT / "research/results/m3_r2"
+FREEZE = ROOT / "research/M3_R2_SOURCE_FREEZE.json"
 CASES = (
     "convergence",
     "nonconvergence",
@@ -132,9 +134,9 @@ def inputs(case):
 def run_case(case, supplied=None):
     market, observations, relations, stress = supplied or inputs(case)
     p = config()
-    portfolio = Portfolio(relations, observations, p, stress)
+    portfolio = Portfolio(relations, p, stress)
     engine = CausalEngine(market, costs=Costs(number(p["fee_bps"]), number(p["slippage_bps"])))
-    result = engine.run_causal(portfolio)
+    result = engine.run_causal(portfolio, observations)
     if abs(result["reconciliation_error"]) > number("1e-24"):
         raise AssertionError("Synthetic ledger does not reconcile")
     return serializable(
@@ -146,6 +148,7 @@ def run_case(case, supplied=None):
             "market_beta_reason": "not_estimated_in_M3",
             "signals": portfolio.events,
             "holdings": holding_periods(result["ledger"]),
+            "risk_exposure": exposure_trace(result["ledger"]),
             "accounting": result,
         }
     )
@@ -217,12 +220,44 @@ def render():
                 }
             )
     out["ledger.csv"] = stream.getvalue()
+    risk_stream = io.StringIO(newline="")
+    risk_fields = [
+        "scenario",
+        "seq",
+        "ts",
+        "event",
+        "equity",
+        "gross_notional",
+        "net_notional",
+        "asset_absolute_notional",
+        "gross_limit",
+        "asset_limit",
+        "gross_excess",
+        "asset_excess",
+        "hard_limit_breached",
+        "risk_exit_fill",
+        "reducing_existing_leg",
+    ]
+    risk_writer = csv.DictWriter(risk_stream, risk_fields, lineterminator="\n")
+    risk_writer.writeheader()
+    for case, run in runs.items():
+        for row in run["risk_exposure"]["events"]:
+            risk_writer.writerow(
+                {
+                    "scenario": case,
+                    **{
+                        k: json.dumps(v, sort_keys=True) if isinstance(v, dict) else v for k, v in row.items()
+                    },
+                }
+            )
+    out["risk_exposure.csv"] = risk_stream.getvalue()
     summary = {
         case: {
             "exit_reasons": sorted({r["reason"] for r in run["signals"] if r["action"] == "exit"}),
             "entries": sum(r["action"] == "entry" for r in run["signals"]),
             "holdings": run["holdings"],
             "risk_halted": run["accounting"]["risk_halted"],
+            "breach_episodes": run["risk_exposure"]["episodes"],
             "reconciliation_error": run["accounting"]["reconciliation_error"],
         }
         for case, run in runs.items()
@@ -232,7 +267,17 @@ def render():
             {
                 "scope": "synthetic_only",
                 "real_window_reads": 0,
-                "qualification_tests_pending": ["cointegration", "ADF", "stability"],
+                "qualification_tests_pending": [
+                    "Engle-Granger cointegration",
+                    "ADF/unit-root/stationarity",
+                    "relationship stability",
+                    "relative-return residual",
+                    "point-in-time candidate qualification",
+                    "prespecified family and multiple-testing-to-qualification wiring",
+                    "FDR procedure",
+                ],
+                "holm_alpha": config()["holm_alpha"],
+                "holm_scope": "external complete family FWER adjustment only; not FDR or qualification",
                 "strategy_conclusion_permitted": False,
                 "runs": summary,
             },
@@ -246,7 +291,7 @@ def render():
 
 
 def verify_freeze():
-    for name in ("M3_PREREGISTRATION.json", FREEZE.name):
+    for name in ("M3_PREREGISTRATION.json", "M3_R2_PREREGISTRATION.json", FREEZE.name):
         spec = json.loads((ROOT / "research" / name).read_text(encoding="utf-8"))
         for path, expected in spec["sha256"].items():
             if sha((ROOT / path).read_bytes()) != expected:
@@ -259,7 +304,7 @@ def perform(action):
     manifest = {
         name: {"bytes": len(body.encode()), "sha256": sha(body.encode())} for name, body in output.items()
     }
-    expected = json.loads((ROOT / "research/M3_EXPECTED_V2.json").read_text(encoding="utf-8"))
+    expected = json.loads((ROOT / "research/M3_R2_EXPECTED.json").read_text(encoding="utf-8"))
     if manifest != expected:
         raise Rejected("artifact_mismatch", "Synthetic results disagree with frozen expected hashes")
     output["manifest.json"] = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
@@ -293,6 +338,7 @@ def main():
             raise Rejected(
                 "real_window_disabled", "M3 does not read real market windows or evaluate strategy"
             )
+        install()
         print(json.dumps(audited(args.action, lambda: perform(args.action)), sort_keys=True))
     except Rejected as exc:
         print(f"{exc.code}: {exc}", file=sys.stderr)

@@ -4,6 +4,7 @@ import math
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 
+from .decision_view import Decision
 from .engine import ZERO, Leg, Rejected, Signal, number
 from .spreads import fit_model
 
@@ -43,20 +44,23 @@ def allocate(proposals, reserved, equity, params):
         return {}, ZERO
     scale = min(number(1), max(ZERO, (equity * number(params["allocation_gross_limit"]) - gross) / total))
     for symbol, amount in requested.items():
+        if not amount:
+            continue
         scale = min(
             scale, max(ZERO, (equity * number(params["allocation_asset_limit"]) - asset[symbol]) / amount)
         )
-    return {book: {s: n * scale for s, n in targets.items()} for book, targets in proposals.items()}, scale
+    return {
+        book: {s: n * scale for s, n in targets.items()}
+        for book, targets in proposals.items()
+        if any(targets.values())
+    }, scale
 
 
 class Portfolio:
-    def __init__(self, relations, observations, params, stress=None):
+    def __init__(self, relations, params, stress=None):
         if len({r.book for r in relations}) != len(relations):
             raise Rejected("invalid_relation", "Book names must be unique")
         self.relations = tuple(sorted(relations, key=lambda r: r.book))
-        # Access only by current timestamp; model receives a growing observed prefix.
-        self.observations = observations
-        self.history = []
         self.params = params
         self.stress = stress or {}
         self.active = {}
@@ -78,12 +82,12 @@ class Portfolio:
             {Leg(book, s): number(value) for s, value in stress.get("fill_fraction", {}).items()},
         )
 
-    def __call__(self, frame, engine, pending):
+    def __call__(self, frame):
         if frame.ts % DAY != DAY - 1:
-            return []
+            return Decision()
         ts = frame.ts
         day = ts // DAY
-        current = self.observations.get(ts)
+        current = frame.observations.get(ts)
         available = (
             current is not None
             and current.ts == ts
@@ -91,27 +95,25 @@ class Portfolio:
             and current.available_at >= current.ts
         )
         orders = []
+        cancel_books = set()
         exited = set()
         for book, state in list(self.active.items()):
             held = {
                 leg.symbol: p.quantity * frame.marks[leg.symbol]
-                for leg, p in engine.positions.items()
+                for leg, p in frame.positions.items()
                 if leg.book == book and p.quantity
             }
-            busy = any(p.leg.book == book for p in pending)
+            busy = any(p.leg.book == book for p in frame.pending)
             if state["exiting"]:
                 if not held and not busy:
                     del self.active[book]
                 continue
             fills = [
                 row
-                for row in engine.ledger
-                if row["event"] == "fill"
-                and row.get("book") == book
-                and row["ts"] > state["known_at"]
-                and row.get("executed_delta")
+                for row in frame.fills
+                if row.leg.book == book and row.ts > state["known_at"] and row.executed_delta
             ]
-            first_fill = fills[0]["ts"] if fills else None
+            first_fill = fills[0].ts if fills else None
             error = hedge_error(state["model"], held)
             reason, z = None, None
             try:
@@ -142,7 +144,7 @@ class Portfolio:
             if reason:
                 if reason == "relationship_failure":
                     self.invalidated.add(book)
-                engine.cancel_books.add(book)
+                cancel_books.add(book)
                 orders.append(self.signal(ts, book, {Leg(book, s): ZERO for s in state["model"].symbols}))
                 self.event(ts, book, "exit", reason, z=z, hedge_error=error)
                 state["exiting"] = True
@@ -150,10 +152,10 @@ class Portfolio:
         # New entries only weekly. Daily exits above do not wait for that schedule.
         if day % self.params["decision_every_days"] == 0 and available:
             proposals, models = {}, {}
-            equity = engine.valuation(frame.marks)["equity"]
+            equity = frame.equity
             reserved = {
-                leg: abs(position.quantity * frame.marks[leg.symbol])
-                for leg, position in engine.positions.items()
+                Leg(leg.book, leg.symbol): abs(position.quantity * frame.marks[leg.symbol])
+                for leg, position in frame.positions.items()
                 if position.quantity
             }
             for state in self.active.values():
@@ -168,7 +170,11 @@ class Portfolio:
                     continue
                 try:
                     model = fit_model(
-                        self.history, relation.symbols, ts, relation.qualification, self.params["window"]
+                        tuple(frame.observations[t] for t in sorted(frame.observations)),
+                        relation.symbols,
+                        ts,
+                        relation.qualification,
+                        self.params["window"],
                     )
                     z = model.zscore(current.prices)
                     if not self.params["entry_z"] <= abs(z) < self.params["break_z"]:
@@ -212,14 +218,7 @@ class Portfolio:
                     allocation_scale=scale,
                     targets=[{"symbol": leg.symbol, "quantity": q} for leg, q in targets.items()],
                 )
-        if available:
-            self.history.append(current)
-        else:
-            # Preserve a missing day so later training cannot silently bridge the gap.
-            from .spreads import Observation
-
-            self.history.append(Observation(ts, ts, {}))
-        return orders
+        return Decision(tuple(orders), frozenset(cancel_books))
 
 
 def holding_periods(ledger):

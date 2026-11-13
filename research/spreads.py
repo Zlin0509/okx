@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 from .engine import Rejected
 
+HOLM_ALPHA = 0.05
+
 
 @dataclass(frozen=True)
 class Observation:
@@ -32,7 +34,7 @@ class Qualification:
             )
 
 
-def holm(pvalues, family, alpha=0.05):
+def holm(pvalues, family, alpha=HOLM_ALPHA):
     """External p-values only; this correction never creates a Qualification."""
     if not family or len(set(family)) != len(family) or set(pvalues) != set(family):
         raise Rejected("incomplete_test_family", "All prespecified tests, including failures, are required")

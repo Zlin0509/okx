@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def audited(action, callback):
-    freeze = ROOT / "research/M3_SOURCE_FREEZE_V2.json"
+    freeze = ROOT / "research/M3_R2_SOURCE_FREEZE.json"
     spec = json.loads(freeze.read_text(encoding="utf-8"))
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
     common = {
@@ -27,7 +27,7 @@ def audited(action, callback):
         "source_sha256": {path: sha((ROOT / path).read_bytes()) for path in spec["sha256"]},
         "scope": "local M3 CLI entries only; tests/programmatic calls not counted; not real-window evidence",
     }
-    log = ROOT / "research/runtime/m3.jsonl"
+    log = ROOT / "research/runtime/m3_r2.jsonl"
     append(log, {**common, "event": "start"})
     try:
         result = callback()

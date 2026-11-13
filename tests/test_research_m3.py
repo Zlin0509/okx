@@ -7,6 +7,7 @@ from decimal import Decimal
 import pytest
 
 from research.causal import CausalEngine
+from research.decision_view import Decision
 from research.engine import Costs, Engine, Frame, Leg, Rejected, Signal, number, serializable
 from research.m3 import CASES, assert_behaviors, config, inputs, run_case
 from research.portfolio import DAY, allocate, holding_periods
@@ -244,7 +245,7 @@ def test_stream_adapter_matches_frozen_r2_for_identical_past_known_orders():
     ]
     a = Engine(market, costs=Costs()).run(signals)
     b = CausalEngine(market, costs=Costs()).run_causal(
-        lambda f, engine, pending: [s for s in signals if s.known_at == f.ts]
+        lambda f: Decision(tuple(s for s in signals if s.known_at == f.ts))
     )
     assert serializable(a["ledger"]) == serializable(b["ledger"])
     assert a["cash"] == b["cash"]
@@ -267,7 +268,7 @@ def test_missing_future_market_data_refuses_before_accounting():
     frames[-1] = Frame(frames[-1].ts, {}, {})
     engine = CausalEngine(replace(market, frames=tuple(frames)))
     with pytest.raises(Rejected):
-        engine.run_causal(lambda *args: [])
+        engine.run_causal(lambda *_: Decision())
     assert not engine.ledger
 
 
@@ -297,6 +298,6 @@ def test_terminal_exit_is_unresolved_and_does_not_fabricate_fill():
     market, *_ = inputs("convergence")
     last = market.frames[-1].ts
     signal = Signal("terminal", last, {Leg("p", "A"): number(0)})
-    result = CausalEngine(market).run_causal(lambda f, *_: [signal] if f.ts == last else [])
+    result = CausalEngine(market).run_causal(lambda f: Decision((signal,)) if f.ts == last else Decision())
     assert result["unresolved_signal_ids"] == ["terminal"]
     assert result["ledger"][-1]["event"] == "unexecutable_signal"

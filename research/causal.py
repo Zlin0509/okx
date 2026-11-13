@@ -3,16 +3,20 @@
 from bisect import bisect_right
 from decimal import localcontext
 
+from .decision_view import Decision, observed_copy, snapshot
 from .engine import ZERO, Engine, Pending, Rejected
 
 
 class CausalEngine(Engine):
-    def run_causal(self, decide):
+    def run(self, signals=()):
+        raise Rejected("causal_entry_required", "Use the immutable snapshot run_causal interface")
+
+    def run_causal(self, decide, observations=None):
         with localcontext() as context:
             context.prec = 34
-            return self._causal(decide)
+            return self._causal(decide, observations or {})
 
-    def _causal(self, decide):
+    def _causal(self, decide, observations):
         if self.used:
             raise Rejected("engine_reuse", "Each adapter is single-use")
         self.used = True
@@ -25,9 +29,23 @@ class CausalEngine(Engine):
             raise Rejected("invalid_capital", "Positive initial equity required")
         pending = []
         seen = set()
-        self.cancel_books = set()
         unresolved_signals = []
+        for key, row in observations.items():
+            if (
+                type(key) is not int
+                or key != row.ts
+                or type(row.available_at) is not int
+                or row.available_at < row.ts
+            ):
+                raise Rejected("invalid_observation_time", "Explicit matching time and availability required")
+        # Only the driver owns the source. The strategy never receives or retains it.
+        future = iter(sorted(observations.values(), key=lambda row: (row.available_at, row.ts)))
+        upcoming = next(future, None)
+        observed = {}
         for frame in self.market.frames:
+            while upcoming is not None and upcoming.available_at <= frame.ts:
+                observed[upcoming.ts] = observed_copy(upcoming)
+                upcoming = next(future, None)
             self.record(frame, "mark")
             for leg, position in sorted(self.positions.items()):
                 if position.quantity and frame.ts in self.market.funding_calendar[leg.symbol]:
@@ -74,20 +92,21 @@ class CausalEngine(Engine):
                 self.execute(frame, order)
             pending = [p for p in pending if p.ts > frame.ts]
             self.record(frame, "frame_end", risk_halted=self.halted)
-            # Callback sees only current ledger/positions; no preloaded future decisions.
+            # The public callback receives a detached immutable available prefix only.
             if not self.halted:
-                decisions = decide(frame, self, tuple(pending))
-                if self.cancel_books:
-                    cancelled = [p for p in pending if p.leg.book in self.cancel_books]
-                    pending = [p for p in pending if p.leg.book not in self.cancel_books]
+                decision = decide(snapshot(frame, self, pending, observed))
+                if not isinstance(decision, Decision):
+                    raise Rejected("invalid_decision", "Return Decision(signals, cancel_books)")
+                if decision.cancel_books:
+                    cancelled = [p for p in pending if p.leg.book in decision.cancel_books]
+                    pending = [p for p in pending if p.leg.book not in decision.cancel_books]
                     self.record(
                         frame,
                         "cancel_book_pending",
-                        books=sorted(self.cancel_books),
+                        books=sorted(decision.cancel_books),
                         cancelled_pending=len(cancelled),
                     )
-                    self.cancel_books.clear()
-                for signal in decisions:
+                for signal in decision.signals:
                     if signal.id in seen or signal.known_at != frame.ts:
                         raise Rejected("invalid_signal", "Unique current-frame signals required")
                     seen.add(signal.id)

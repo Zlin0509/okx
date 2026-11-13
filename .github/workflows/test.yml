@@ -17,8 +17,8 @@ jobs:
       - run: uv sync --frozen --group dev
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run pytest -q
-      - run: uv run python -m research.m2 unit
+      - run: uv run python -m research.synthetic_guard pytest -q
+      - run: uv run python -m research.m3 verify
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
