@@ -1,0 +1,18 @@
+.venv/
+.env
+.env.*
+!.env.example
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+data/
+artifacts/
+*.egg-info/
+.packaging-venv/
+build/
+dist/
+*.spec
+!packaging/macos/*.spec
+
+# Local demo credentials; never commit.
+.secrets/

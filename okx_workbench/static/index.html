@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>OKX · 策略工作台</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="#overview"
+        ><span class="brand-mark" aria-hidden="true">▦</span> OKX
+        <small>WORKBENCH</small></a
+      >
+      <div class="workspace-label">交易研究 / 01</div>
+      <nav aria-label="主导航">
+        <a href="#overview" class="selected"><span>◈</span> 总览</a
+        ><a href="#strategy"><span>⌘</span> 策略实验室</a
+        ><a href="#analysis"><span>↗</span> 回测分析</a
+        ><a href="#orders"><span>≡</span> 执行记录</a>
+      </nav>
+      <div class="sidebar-bottom">
+        <span class="status-dot"></span
+        ><span id="connection">正在连接本地服务</span>
+        <p>研究 · 验证 · 执行<br />每一笔交易都有迹可循。</p>
+        <small>BUILD 0.1 / DEMO FIRST</small>
+      </div>
+    </aside>
+    <main>
+      <header>
+        <div class="breadcrumb">工作空间 <span>/</span> 策略与执行</div>
+        <div class="header-right">
+          <span id="environment" class="badge">读取环境</span
+          ><span class="avatar">ZL</span>
+        </div>
+      </header>
+      <section id="overview" class="overview">
+        <div id="connection-notice" class="notice" role="status">
+          正在同步执行状态…
+        </div>
+        <div class="eyebrow">SYSTEMATIC TRADING / 系统化交易</div>
+        <div class="page-title">
+          <div>
+            <h1>策略与交易，总览<span>。</span></h1>
+            <p>从一个想法，到一条经过验证的交易规则。</p>
+          </div>
+          <button class="button subtle" id="refresh">↻ 刷新数据</button>
+        </div>
+        <div id="source-notice" class="notice">正在读取数据源…</div>
+        <div id="blocker-notice" class="notice hidden" role="alert"></div>
+        <div class="metrics">
+          <article>
+            <div class="metric-label">账户权益 <span>USDT</span></div>
+            <strong id="equity">—</strong
+            ><small id="account-note">等待账户数据</small>
+          </article>
+          <article>
+            <div class="metric-label">未实现盈亏 <span>USDT</span></div>
+            <strong id="unrealized">—</strong><small>当前持仓按市价估值</small>
+          </article>
+          <article>
+            <div class="metric-label" id="realized-label">
+              已实现净收益 <span>USDT</span>
+            </div>
+            <strong id="realized">—</strong
+            ><small id="realized-note">扣除交易手续费</small>
+          </article>
+          <article>
+            <div class="metric-label">
+              执行状态
+              <span id="execution-dot" class="status-dot inactive"></span>
+            </div>
+            <strong id="execution-state" class="state-text">待配置</strong
+            ><small id="active-note">生成策略后手动启动</small>
+          </article>
+        </div>
+      </section>
+      <div class="work-grid">
+        <section class="panel market-panel">
+          <div class="panel-heading">
+            <div>
+              <div class="eyebrow">MARKET STRUCTURE</div>
+              <h2 id="market-heading">BTC / USDT <span>永续</span></h2>
+            </div>
+            <div class="market-price">
+              <strong id="last-price">—</strong
+              ><span id="market-source">—</span>
+            </div>
+          </div>
+          <div
+            id="market-chart"
+            class="chart"
+            role="img"
+            aria-label="合约收盘价走势图"
+          ></div>
+          <div class="chart-footer">
+            <span>仅使用已完成 K 线</span><span id="market-range">—</span>
+          </div>
+        </section>
+        <section class="panel risk-panel">
+          <div class="eyebrow">GUARDRAILS / 风控边界</div>
+          <h2>先控制风险，再执行。</h2>
+          <dl>
+            <div>
+              <dt>单笔名义上限</dt>
+              <dd id="risk-order">—</dd>
+            </div>
+            <div>
+              <dt>总仓位名义上限</dt>
+              <dd id="risk-position">—</dd>
+            </div>
+            <div>
+              <dt>权益占用上限</dt>
+              <dd id="risk-fraction">—</dd>
+            </div>
+            <div>
+              <dt>价格偏移上限</dt>
+              <dd id="risk-slip">—</dd>
+            </div>
+          </dl>
+          <p>逐仓 · 单向做多 · 限价 IOC<br />订单意图持久化，相同信号去重。</p>
+          <button id="stop" class="button stop">Ⅱ 暂停全部策略</button
+          ><small>暂停停止后续下单；已有仓位和挂单需另行处理。</small>
+        </section>
+      </div>
+      <section id="strategy" class="panel strategy-panel">
+        <div class="panel-heading">
+          <div>
+            <div class="eyebrow">01 / STRATEGY LAB</div>
+            <h2>策略实验室</h2>
+          </div>
+          <span class="tag">均线趋势 · 多仓 / 空仓</span>
+        </div>
+        <form id="strategy-form">
+          <div class="form-grid">
+            <label
+              >交易合约<select id="symbol">
+                <option>BTC-USDT-SWAP</option>
+                <option>ETH-USDT-SWAP</option>
+              </select></label
+            >
+            <label
+              >K 线周期<select id="bar">
+                <option>1m</option>
+                <option selected>1H</option>
+                <option>4H</option>
+                <option>1D</option>
+              </select></label
+            >
+            <label
+              >快均线<input
+                id="fast"
+                type="number"
+                min="2"
+                max="40"
+                value="8"
+                required
+            /></label>
+            <label
+              >慢均线<input
+                id="slow"
+                type="number"
+                min="3"
+                max="100"
+                value="24"
+                required
+            /></label>
+            <label
+              >策略预算 / 权益 %<input
+                id="allocation"
+                type="number"
+                min="0.1"
+                max="10"
+                step="0.1"
+                value="5"
+                required
+            /></label>
+          </div>
+          <div class="strategy-actions">
+            <p>
+              自动生成在前 70% 数据上选参，用后 30% 独立验证。<br />启动将使用已保存策略的参数；修改表单仅影响新回测。
+            </p>
+            <button class="button primary" id="generate" type="submit">
+              ✧ 自动生成策略
+            </button>
+          </div>
+        </form>
+        <div id="strategy-result" class="strategy-result empty">
+          尚无策略。先生成，再验证，最后选择启动。
+        </div>
+        <div class="strategy-bottom">
+          <span id="selected-strategy">当前未选中策略</span>
+          <div>
+            <button id="tick" class="button subtle" disabled>
+              执行一次信号</button
+            ><button id="start" class="button dark" disabled>启动策略 →</button>
+          </div>
+        </div>
+      </section>
+      <section id="analysis" class="panel analysis-panel">
+        <div class="panel-heading">
+          <div>
+            <div class="eyebrow">02 / BACKTEST</div>
+            <h2>让结果经得起检验</h2>
+          </div>
+          <a id="export" class="export hidden" href="#">导出权益 CSV ↗</a>
+        </div>
+        <div class="backtest-controls">
+          <label
+            >初始资金 / USDT<input
+              id="capital"
+              type="number"
+              min="100"
+              max="10000000"
+              value="10000" /></label
+          ><label
+            >单边费率 / bps<input
+              id="fee"
+              type="number"
+              min="0"
+              max="100"
+              step="0.1"
+              value="5" /></label
+          ><label
+            >单边滑点 / bps<input
+              id="slippage"
+              type="number"
+              min="0"
+              max="100"
+              step="0.1"
+              value="20" /></label
+          ><button id="backtest" class="button dark">运行完整回测 ↗</button>
+        </div>
+        <div class="backtest-summary" id="backtest-summary">
+          <div><span>净收益率</span><strong>—</strong></div>
+          <div><span>最大回撤</span><strong>—</strong></div>
+          <div><span>胜率</span><strong>—</strong></div>
+          <div><span>完成交易</span><strong>—</strong></div>
+          <div><span>手续费 / USDT</span><strong>—</strong></div>
+        </div>
+        <p id="backtest-snapshot" class="footnote">尚无回测参数快照。</p>
+        <p id="backtest-stale" class="notice hidden" role="status">
+          参数已修改，当前结果和 CSV 来自上次回测，请重新运行。
+        </p>
+        <div
+          id="equity-chart"
+          class="chart equity-chart"
+          role="img"
+          aria-label="回测权益曲线"
+        >
+          <div class="chart-empty">
+            运行回测，查看资金如何随时间变化。<small
+              >收益来自可复现的交易规则，而不是预设数字。</small
+            >
+          </div>
+        </div>
+        <p id="backtest-note" class="footnote">
+          信号后下一根开盘成交，含双边手续费与滑点。理论回测不含资金费、清算与盘口深度，未按合约张数取整。
+        </p>
+      </section>
+      <section id="orders" class="panel">
+        <div class="panel-heading">
+          <div>
+            <div class="eyebrow">03 / EXECUTION LOG</div>
+            <h2>执行记录</h2>
+          </div>
+          <button id="reconcile" class="button subtle">↻ 订单对账</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>合约 / 客户端订单号</th>
+                <th>方向</th>
+                <th>张数</th>
+                <th>限价</th>
+                <th>状态 / 已成交张数</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="order-rows">
+              <tr>
+                <td colspan="7" class="empty">暂无订单</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="events" class="events"></div>
+      </section>
+      <footer>
+        OKX STRATEGY WORKBENCH
+        <span>回测仅用于研究。启用执行前，请核对数据源、账户与风控参数。</span>
+      </footer>
+    </main>
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    <dialog id="start-dialog">
+      <form method="dialog">
+        <div class="eyebrow">ACTIVATE STRATEGY</div>
+        <h2>确认启动策略</h2>
+        <p id="start-description"></p>
+        <label id="live-confirm-label" class="hidden"
+          >输入 START_LIVE 确认使用真实资金<input
+            id="live-confirm"
+            autocomplete="off"
+        /></label>
+        <div class="dialog-actions">
+          <button class="button subtle" value="cancel">返回检查</button
+          ><button id="confirm-start" class="button dark" type="button">
+            确认启动
+          </button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>
