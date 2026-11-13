@@ -2,7 +2,7 @@
 
 可本地运行的合约策略研究与自动执行平台。Python / FastAPI + SQLite + 原生 JavaScript，中文控制台，无外部 CDN。默认 `demo` 环境、离线演练数据源，不需要密钥；接入 OKX 后仍默认模拟盘。
 
-macOS DMG 的安装、签名状态、用户数据位置与验收范围见 [桌面版中文说明](packaging/macos/快速开始.md)。DMG 内置运行时，原生窗口可选择离线演练或 OKX 模拟盘，并安全保存本机受限配置；源码 ZIP 需要 uv/Python 环境。桌面包装沿用审查通过的 `0dae104` 业务源码，增加双来源桌面入口、安全本机配置与生命周期管理；当前版本尚未重新做真实 OKX 模拟盘联调。
+macOS DMG 的安装、签名状态、用户数据位置与验收范围见 [桌面版中文说明](packaging/macos/快速开始.md)。DMG 内置运行时，原生窗口可选择离线演练或 OKX 模拟盘，并安全保存本机受限配置；源码 ZIP 需要 uv/Python 环境。桌面包装沿用审查通过的 `0dae104` 业务源码，增加双来源桌面入口、安全本机配置与生命周期管理；已有DMG尚无真实在线联调结论；最新源码验收见 `docs/SOURCE_DEMO_20261114.md`，DMG工作已暂停。
 
 ## 启动
 
@@ -39,7 +39,7 @@ OKX_PASSPHRASE=你的Passphrase
 
 支持官方域名 `https://www.okx.com`、`https://us.okx.com`、`https://eea.okx.com`；按注册地区在 `.env` 设置 `OKX_BASE_URL`。不会向自定义域名或重定向目标发送密钥。
 
-支持 BTC-USDT-SWAP、ETH-USDT-SWAP，1H / 4H / 1D，USDT 本位线性永续；目标合约只接管单向逐仓多仓。已有空仓、全仓或双向持仓会被拒绝。请不要让软件接管同合约的人工作业仓位。
+支持 BTC-USDT-SWAP、ETH-USDT-SWAP，1m / 1H / 4H / 1D，USDT 本位线性永续；目标合约只接管单向逐仓多仓。已有空仓、全仓或双向持仓会被拒绝。请不要让软件接管同合约的人工作业仓位。
 
 ## 账户互斥与实盘禁用
 
@@ -120,4 +120,4 @@ uv run python scripts/demo_smoke.py --database data/workbench.sqlite3 --credenti
 
 修复与回归记录见 `docs/REVIEW_FIXES.md`。原始成交记录在 `docs/VALIDATION.md`，本轮修复仅用离线/mock，未重复执行交易。
 
-最新真实模拟盘续验结论与恢复要求见 `docs/DEMO_REVALIDATION.md`；目前指定凭据缺失，尚无最新版本成交证据。个人使用版保留 ad-hoc、跳过 Developer ID/公证，按中文说明通过 macOS 的逐应用确认入口打开，仍需用户自行确认来源及校验。
+最新真实模拟盘续验结论与恢复要求见 `docs/DEMO_REVALIDATION.md`；指定凭据已按要求安全保存，源码已完成最小规模真实模拟盘成交与清理，见 `docs/SOURCE_DEMO_20261114.md`；该结论不覆盖旧DMG。个人使用版保留 ad-hoc、跳过 Developer ID/公证，按中文说明通过 macOS 的逐应用确认入口打开，仍需用户自行确认来源及校验。
