@@ -1,0 +1,37 @@
+{
+  "label": "SYNTHETIC TEST DATA ONLY: abstract millisecond ticks, not historical prices or strategy returns",
+  "provenance": "synthetic_test",
+  "initial_equity": "10000",
+  "calendar_source": "Explicit hand-authored unit-test calendar; not an exchange settlement schedule",
+  "costs": {"fee_bps": "10", "slippage_bps": "100"},
+  "frame_calendar": [0, 1000, 2000, 3000],
+  "execution_calendar": {"A": [0, 1000, 2000, 3000], "B": [0, 1000, 2000, 3000]},
+  "funding_calendar": {"A": [2000], "B": [2000]},
+  "frames": [
+    {"ts": 0, "marks": {"A": "100", "B": "50"}, "execution": {"A": "100", "B": "50"}},
+    {"ts": 1000, "marks": {"A": "100", "B": "50"}, "execution": {"A": "100", "B": "50"}},
+    {"ts": 2000, "marks": {"A": "110", "B": "40"}, "execution": {"A": "110", "B": "40"}},
+    {"ts": 3000, "marks": {"A": "120", "B": "45"}, "execution": {"A": "120", "B": "45"}}
+  ],
+  "funding": [
+    {"ts": 2000, "symbol": "A", "realized_rate": "0.01"},
+    {"ts": 2000, "symbol": "B", "realized_rate": "-0.02"}
+  ],
+  "signals": [
+    {"id": "open", "known_at": 0, "targets": [
+      {"book": "pair", "symbol": "A", "quantity": "2"},
+      {"book": "pair", "symbol": "B", "quantity": "-3"}
+    ]},
+    {"id": "close", "known_at": 2500, "targets": [
+      {"book": "pair", "symbol": "A", "quantity": "0"},
+      {"book": "pair", "symbol": "B", "quantity": "0"}
+    ]}
+  ],
+  "hand_calculated_expected": {
+    "realized_pnl": "47.75",
+    "fees": "0.72445",
+    "funding_cashflow": "-4.6",
+    "slippage_diagnostic": "7.25",
+    "cash": "10042.42555"
+  }
+}

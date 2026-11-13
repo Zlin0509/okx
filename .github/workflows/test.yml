@@ -18,6 +18,7 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest -q
+      - run: uv run python -m research.m2 unit
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

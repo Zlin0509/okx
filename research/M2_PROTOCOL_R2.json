@@ -1,0 +1,113 @@
+{
+  "arithmetic": "Decimal precision 34 in local context; no process-global precision change",
+  "authorization_comment": "01a1d440-c0b3-7a9b-84e2-aa471d1be2a4",
+  "capital_model": "Cash is initial collateral plus realized PnL and signed funding minus fees; opening a short does not credit sale notional",
+  "code_base": "d67cfd275c22e74b3ebcaade14bb66a614e89f90",
+  "controlled_base": "c5f6ffc01eaa61b1c08f0bf9259a2bd7281c4668",
+  "costs": {
+    "engine_default_adverse_slippage_bps_per_fill": "5",
+    "engine_default_fee_bps_per_fill": "5",
+    "formula": "fee = abs(executed base quantity) * actual modeled execution price * fee_bps / 10000",
+    "slippage": "Buy above reference, sell below reference; embedded in fill PnL, reported separately but never deducted twice",
+    "status": "Explicit diagnostic assumptions only, not a quote for any OKX account or future M3 research fee schedule",
+    "stress_multiplier": "2",
+    "test_fixture_fee_bps": "10",
+    "test_fixture_slippage_bps": "100"
+  },
+  "currency": "USDT collateral, linear perpetuals; signed base-asset quantities, not contract counts",
+  "eligibility": {
+    "candidate_registry": "M1 availability registry, all 28 unordered pairs and 6 alt/BTC/ETH baskets; not a reconstructed historical universe",
+    "complete_first_day": "ceil(max(verified listing time, verified continuous tradability time) to UTC day); midnight is already complete",
+    "diagnostic_lagged_turnover_days": 30,
+    "diagnostic_rolling_lookback_days": 56,
+    "lagged_turnover_rule": {
+      "column": "volCcyQuote = row[7], USDT",
+      "comparison": ">= inclusive",
+      "invalid": "missing, empty, nonfinite or negative value rejects window; no zero fill",
+      "minimum_mean_daily_usdt": "10000000",
+      "observations_required": 30,
+      "status": "fixed diagnostic liquidity floor, not historically ranked universe or capacity estimate; not chosen using OOS returns",
+      "window": "[t-30 days,t), excludes current t and future data",
+      "zero": "valid observation; all-zero window fails numerical threshold"
+    },
+    "listing_age_days": 180,
+    "metadata_missing_or_unverified": "true eligible dates unknown; never substitute acquisition first day; report provisional current-metadata diagnostics separately",
+    "provisional_rule": "For each leg, require t >= complete first day + 180 days; require 56 preceding full post-admission days and current day plus lagged 30 turnover days; intersect legs",
+    "scope": "56/30 are frozen data-readiness diagnostics, not convergence signal parameters selected using returns",
+    "test_qualification": "none until verified point-in-time tradability and history exist; provisional day counts do not enter FDR",
+    "training_end_exclusive": "2025-01-01",
+    "training_start": "2021-01-01"
+  },
+  "equity_model": "cash + sum(quantity * (current mark - average entry))",
+  "execution": {
+    "next_tick": "First declared executable timestamp strictly after known_at; equal timestamp never fills",
+    "overlap": "Reject a later signal touching a leg while its earlier fill is still pending",
+    "partial_fill": "Record actual quantity and residual target; do not retry automatically or invent completion",
+    "publication_boundary": "M3 must supply actual close/data availability time; never stamp a completed daily candle before its close to force a same-boundary fill",
+    "signal_information": "Caller supplies point-in-time target base quantities and true availability timestamp; M2 does not fit signals or hedge ratios",
+    "stress": "Additional execution-tick delays and deterministic fill fractions in [0,1]",
+    "terminal": "No invented final-close fill; open positions remain marked and are separately reported"
+  },
+  "execution_audit": {
+    "anti_rerun_claim": false,
+    "count_scope": "derive attempts/completions from available log; never global historical total",
+    "historical_counts": "unknown; legacy values are author claims without independent run logs",
+    "new_record_fields": [
+      "started_at_utc",
+      "finished_at_utc",
+      "HEAD",
+      "source_sha256",
+      "result_sha256",
+      "append-only sequence and hash chain"
+    ],
+    "real_window_in_this_revision": "disabled; do not rerun for evidence repair"
+  },
+  "funding": {
+    "boundary": "Convention is frozen for diagnostics, not an assertion of exchange race ordering at exact settlement milliseconds",
+    "formula": "cashflow = -signed base quantity held before timestamp * settlement mark price * realized funding rate",
+    "missing": "Reject absent or nonfinite actual rates and contemporaneous marks before any cash or position mutation",
+    "same_timestamp": "Existing holdings settle before any fills, including closes; positions opened at that timestamp do not pay that settlement",
+    "schedule": "Explicit independently declared per-instrument settlement calendar; do not infer completeness from the returned rate rows"
+  },
+  "integration": {
+    "full_research_conclusion": "always unavailable at M2; preserve original training and locked OOS requirements",
+    "funded_nav_without_marks": "reject",
+    "m1_snapshot_immutable": true,
+    "missing_settlement_marks_expected": true,
+    "new_provider_requests": 0,
+    "real_rate_window_utc": [
+      "2026-08-14",
+      "2026-11-01"
+    ],
+    "this_revision_policy": "No real-window execution; only verify preserved cached artifact values and provenance limitations"
+  },
+  "issue": "ZLIN-11",
+  "ledger": "Monotonic event sequence, cash, realized/unrealized PnL, equity, fees, signed funding, slip diagnostic, per-book positions and absolute asset exposure",
+  "milestone": "M2",
+  "model_boundaries": [
+    "No exchange initial/maintenance margin tiers, liquidation engine, ADL, collateral haircut, bankruptcy recovery or insurance fund model",
+    "No order-book depth, queue position, probabilistic fills, tick/lot rounding, contract migration or exchange minimum order-size model",
+    "Per-book virtual legs are not a claim that the exchange can maintain offsetting positions in net mode",
+    "No coin borrowing; perpetual collateral cashflows do not imply short-sale proceeds or borrowed spot inventory",
+    "Volatility targeting, stationarity tests, half-life, beta estimation and convergence signal validation remain M3 work"
+  ],
+  "official_references": [
+    "https://www.okx.com/help/perps-funding-fee-mechanism",
+    "https://www.okx.com/help/how-to-calculate-the-contract-transaction-fee",
+    "https://www.okx.com/help/ii-mark-price-and-last-price"
+  ],
+  "purpose": "Independent offline accounting engine and deterministic verification; not M3 signal selection or research returns",
+  "rectification_authorization_comment": "01a1d465-1ec8-79a2-888e-6e3a10d3f2ca",
+  "revision": 2,
+  "risk": {
+    "drift": "Detect after mark/funding; halt new exposure, cancel pending legs, flatten each held leg at its next strictly later executable tick",
+    "gross_absolute_notional_to_equity_cap": "1",
+    "halt_lifecycle": "No automatic strategy restart in a diagnostic run",
+    "insolvency": "Reject result on nonpositive equity; do not fabricate liquidation execution or recovery",
+    "order_gate": "Evaluate caps against projected post-fee and post-slippage equity; allow reducing same-side positions to exit a breach",
+    "per_asset_sum_of_absolute_leg_notional_to_equity_cap": "0.25",
+    "shared_asset_policy": "Sum absolute exposures across books, even for opposing directions",
+    "unresolved_exit": "Flag unresolved if the dataset ends before a required exit; never assume execution"
+  },
+  "source_separation": "Executable trade prices and settlement/valuation mark prices are different inputs; no substitution or forward fill"
+}

@@ -119,3 +119,5 @@ uv run python scripts/demo_smoke.py --database data/workbench.sqlite3 --credenti
 脚本固定上限 25 USDT，仅在无永续持仓、无挂单、单向持仓、认证和行情预检通过时继续。按真实已完成 K 线选择一组满足快均线大于慢均线的简单规则，经生产 `Engine.execute` 链路触发开仓；查询订单终态与持仓变化，再以 `reduceOnly` 清理本次可归属新增仓位，最终暂停。没有有效期内的做多信号时停止，不补单或伪造行情。报告只有脱敏的信号、合约、数量、成交状态、费用和清理结果。凭据类型/权限不符时停止，不切换实盘。
 
 修复与回归记录见 `docs/REVIEW_FIXES.md`。原始成交记录在 `docs/VALIDATION.md`，本轮修复仅用离线/mock，未重复执行交易。
+
+ZLIN-11 M2 R2 仅代码核验见 [research/README.md](research/README.md)。不包含受控市场数据或其历史。
