@@ -40,8 +40,10 @@ enum SecureCredentialFile {
             unlinkat(directory, name, 0)
             close(descriptor)
         }
-        guard fchmod(descriptor, 0o600) == 0 else { throw SaveError.ioFailure }
+        // Observe immediately after creation, before any chmod could mask a
+        // regression in the creation mode. No credential bytes exist here.
         try observe?(.created, root.appendingPathComponent(name))
+        guard fchmod(descriptor, 0o600) == 0 else { throw SaveError.ioFailure }
         guard renameat(directory, name, directory, destination.lastPathComponent) == 0 else {
             throw SaveError.ioFailure
         }
