@@ -12,8 +12,8 @@ from .execution_audit import append, canonical, sha
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def audited(action, callback):
-    freeze = ROOT / "research/M3_R2_SOURCE_FREEZE_V2.json"
+def audited(action, callback, freeze=None):
+    freeze = Path(freeze) if freeze is not None else ROOT / "research/M3_R2_SOURCE_FREEZE_V2.json"
     spec = json.loads(freeze.read_text(encoding="utf-8"))
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
     common = {

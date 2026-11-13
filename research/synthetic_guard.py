@@ -1,4 +1,10 @@
-"""Regression guard against original snapshots and network; not a process security sandbox."""
+"""Regression guard against original snapshots and network; not a process security sandbox.
+
+Scope: the current Python process and its threads only. Subprocesses, native
+C extensions and code paths that do not emit the Python audit events below are
+not covered. Installing this hook is not OS-level isolation and cannot prove
+the absence of out-of-process activity.
+"""
 
 import json
 import os
@@ -8,15 +14,38 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+GUARD_SCOPE = (
+    "current Python process and its threads only; subprocesses, native C calls "
+    "and OS-level isolation are not covered"
+)
+
+# CPython raises these audit events at the Python entry point, before the
+# corresponding resolver or connect syscall runs. Blocking them keeps the
+# synthetic-only reproduction from reaching real name resolution or a socket.
+NETWORK_EVENTS = {
+    "socket.connect": ("blocked_network_connects", "synthetic_only_network_forbidden"),
+    "socket.getaddrinfo": ("blocked_network_resolutions", "synthetic_only_dns_forbidden"),
+    "socket.gethostbyname": ("blocked_network_resolutions", "synthetic_only_dns_forbidden"),
+    "socket.gethostbyname_ex": ("blocked_network_resolutions", "synthetic_only_dns_forbidden"),
+    "socket.gethostbyaddr": ("blocked_network_resolutions", "synthetic_only_dns_forbidden"),
+    "socket.getnameinfo": ("blocked_network_resolutions", "synthetic_only_dns_forbidden"),
+}
+
 
 def install():
     forbidden = (ROOT / "research/snapshots").resolve()
-    report = {"blocked_snapshot_accesses": 0, "blocked_network_connects": 0}
+    report = {
+        "blocked_snapshot_accesses": 0,
+        "blocked_network_connects": 0,
+        "blocked_network_resolutions": 0,
+    }
 
     def guard(event, args):
-        if event == "socket.connect":
-            report["blocked_network_connects"] += 1
-            raise PermissionError("synthetic_only_network_forbidden")
+        network = NETWORK_EVENTS.get(event)
+        if network is not None:
+            counter, message = network
+            report[counter] += 1
+            raise PermissionError(message)
         if event in {"open", "os.listdir", "os.scandir"} and args:
             value = args[0]
             if isinstance(value, (str, bytes, os.PathLike)):
@@ -41,7 +70,7 @@ def main():
 
         result = pytest.main(sys.argv[2:])
         print(
-            json.dumps({"synthetic_guard": report, "scope": "this Python process and its threads only"}),
+            json.dumps({"synthetic_guard": report, "scope": GUARD_SCOPE}),
             file=sys.stderr,
         )
         raise SystemExit(3 if any(report.values()) else result)

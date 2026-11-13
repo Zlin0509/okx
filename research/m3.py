@@ -16,12 +16,12 @@ from .m3_audit import audited
 from .portfolio import DAY, Portfolio, Relation, holding_periods
 from .risk_trace import exposure_trace
 from .spreads import Observation, Qualification
-from .synthetic_guard import install
+from .synthetic_guard import GUARD_SCOPE, install
 
 ROOT = Path(__file__).resolve().parent.parent
 PARAMS = ROOT / "research/M3_PROTOCOL_R2.json"
 RESULTS = ROOT / "research/results/m3_r2_v2"
-FREEZE = ROOT / "research/M3_R2_SOURCE_FREEZE_V2.json"
+FREEZE = ROOT / "research/M3_R2_SOURCE_FREEZE_GUARD_P2.json"
 CASES = (
     "convergence",
     "nonconvergence",
@@ -338,11 +338,35 @@ def main():
             raise Rejected(
                 "real_window_disabled", "M3 does not read real market windows or evaluate strategy"
             )
-        install()
-        print(json.dumps(audited(args.action, lambda: perform(args.action)), sort_keys=True))
+        guard_report = install()
+
+        def run():
+            result = perform(args.action)
+            # Counts are added after the frozen result hashes are checked, so the
+            # synthetic golden manifest stays byte-identical while this CLI run
+            # still reports what the installed guard actually blocked.
+            result["synthetic_guard"] = dict(guard_report)
+            result["guard_scope"] = GUARD_SCOPE
+            return result
+
+        print(json.dumps(audited(args.action, run, freeze=FREEZE), sort_keys=True))
     except Rejected as exc:
         print(f"{exc.code}: {exc}", file=sys.stderr)
         raise SystemExit(2) from None
+    except PermissionError as exc:
+        # A trip is evidence the guard ran; still report this process's counts.
+        print(
+            json.dumps(
+                {
+                    "synthetic_guard": dict(guard_report),
+                    "guard_scope": GUARD_SCOPE,
+                    "guard_error": str(exc),
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(3) from None
 
 
 if __name__ == "__main__":
