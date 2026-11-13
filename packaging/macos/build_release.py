@@ -15,7 +15,7 @@ import zipfile
 from pathlib import Path
 
 BASE = "0dae104cf4799344a26902233b3fb1ef14aab327"
-VERSION = "0.1.0-macos.1"
+VERSION = "0.1.0-macos.2"
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -102,7 +102,7 @@ def main():
     work.mkdir(parents=True)
     output.mkdir(parents=True)
     commit = run("git", "rev-parse", "HEAD").strip()
-    prefix = "OKX-Workbench-0.1.0-macos-arm64"
+    prefix = "OKX-Workbench-0.1.0-macos.2-arm64"
     source = output / (prefix + "-source.zip")
     core = source_zip(source, commit)
     run(
@@ -143,7 +143,7 @@ def main():
         "CFBundleExecutable": "OKXWorkbench",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": "1",
+        "CFBundleVersion": "2",
         "LSMinimumSystemVersion": "26.5",
         "NSHighResolutionCapable": True,
         "NSHumanReadableCopyright": "OKX Workbench — independent offline strategy workbench",
@@ -161,6 +161,9 @@ def main():
         "pyinstaller": importlib.metadata.version("pyinstaller"),
         "default_mode": "demo",
         "default_source": "offline",
+        "supported_sources": ["offline", "okx_demo"],
+        "desktop_max_order_usdt": "25",
+        "demo_credentials_storage": "native input, user-owned 0600 file outside bundle/repository",
         "live_supported": False,
         "credentials_included": False,
         "signature": "ad-hoc",

@@ -2,7 +2,7 @@
 
 可本地运行的合约策略研究与自动执行平台。Python / FastAPI + SQLite + 原生 JavaScript，中文控制台，无外部 CDN。默认 `demo` 环境、离线演练数据源，不需要密钥；接入 OKX 后仍默认模拟盘。
 
-macOS DMG 的安装、签名状态、用户数据位置与验收范围见 [桌面版中文说明](packaging/macos/快速开始.md)。DMG 内置运行时，可直接启动无密钥离线演练；源码 ZIP 需要 uv/Python 环境。桌面包装沿用审查通过的 `0dae104` 业务源码，仅增加离线入口与应用生命周期管理；当前版本尚未重新做真实 OKX 模拟盘联调。
+macOS DMG 的安装、签名状态、用户数据位置与验收范围见 [桌面版中文说明](packaging/macos/快速开始.md)。DMG 内置运行时，原生窗口可选择离线演练或 OKX 模拟盘，并安全保存本机受限配置；源码 ZIP 需要 uv/Python 环境。桌面包装沿用审查通过的 `0dae104` 业务源码，增加双来源桌面入口、安全本机配置与生命周期管理；当前版本尚未重新做真实 OKX 模拟盘联调。
 
 ## 启动
 
@@ -116,6 +116,8 @@ uv run python scripts/demo_smoke.py --database data/workbench.sqlite3 --credenti
 uv run python scripts/demo_smoke.py --database data/workbench.sqlite3 --credentials-file /secure/path/okx-demo.json --execute-demo --report data/demo-result.json
 ```
 
-脚本固定上限 25 USDT，仅在无永续持仓、无挂单、单向持仓、认证和行情预检通过时继续。按真实已完成 K 线选择一组满足快均线大于慢均线的简单规则，经生产 `Engine.execute` 链路触发开仓；查询订单终态与持仓变化，再以 `reduceOnly` 清理本次可归属新增仓位，最终暂停。没有有效期内的做多信号时停止，不补单或伪造行情。报告只有脱敏的信号、合约、数量、成交状态、费用和清理结果。凭据类型/权限不符时停止，不切换实盘。
+脚本固定上限 25 USDT，要求明确模拟盘凭据、读取+交易且无提现权限、无永续持仓/挂单、单向持仓、认证和行情预检通过。按合约最小可成交量开仓，最小量超限即停止，提交前再次限制最小量及名义上限。按真实已完成 K 线选择一组满足快均线大于慢均线的简单规则，经生产 `Engine.execute` 链路触发开仓；查询订单终态与持仓变化，再以 `reduceOnly` 清理本次可归属新增仓位，最终暂停。没有有效期内的做多信号时停止，不补单或伪造行情。报告只有脱敏的信号、合约、数量、成交状态、费用和清理结果。凭据类型/权限不符时停止，不切换实盘。
 
 修复与回归记录见 `docs/REVIEW_FIXES.md`。原始成交记录在 `docs/VALIDATION.md`，本轮修复仅用离线/mock，未重复执行交易。
+
+最新真实模拟盘续验结论与恢复要求见 `docs/DEMO_REVALIDATION.md`；目前指定凭据缺失，尚无最新版本成交证据。个人使用版保留 ad-hoc、跳过 Developer ID/公证，按中文说明通过 macOS 的逐应用确认入口打开，仍需用户自行确认来源及校验。
