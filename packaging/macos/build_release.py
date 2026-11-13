@@ -15,7 +15,7 @@ import zipfile
 from pathlib import Path
 
 BASE = "0dae104cf4799344a26902233b3fb1ef14aab327"
-VERSION = "0.1.0-macos.2"
+VERSION = "0.1.0-macos.3"
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -102,7 +102,7 @@ def main():
     work.mkdir(parents=True)
     output.mkdir(parents=True)
     commit = run("git", "rev-parse", "HEAD").strip()
-    prefix = "OKX-Workbench-0.1.0-macos.2-arm64"
+    prefix = "OKX-Workbench-0.1.0-macos.3-arm64"
     source = output / (prefix + "-source.zip")
     core = source_zip(source, commit)
     run(
@@ -133,6 +133,7 @@ def main():
         "-framework",
         "AppKit",
         ROOT / "packaging/macos/Launcher.swift",
+        ROOT / "packaging/macos/SecureCredentialFile.swift",
         "-o",
         macos / "OKXWorkbench",
     )
@@ -143,10 +144,10 @@ def main():
         "CFBundleExecutable": "OKXWorkbench",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": "2",
+        "CFBundleVersion": "3",
         "LSMinimumSystemVersion": "26.5",
         "NSHighResolutionCapable": True,
-        "NSHumanReadableCopyright": "OKX Workbench — independent offline strategy workbench",
+        "NSHumanReadableCopyright": "OKX Workbench — independent demo strategy workbench",
     }
     (bundle / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
     copy_licenses(resources / "licenses")

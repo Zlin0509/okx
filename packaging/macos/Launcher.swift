@@ -64,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.stringValue = "正在启动 \(source == "okx" ? "OKX 模拟盘" : "离线演练")…"
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            SecureCredentialFile.removeEmptyOrphans(in: root)
             let log = root.appendingPathComponent("desktop.log")
             if !FileManager.default.fileExists(atPath: log.path) {
                 FileManager.default.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600])
@@ -172,11 +173,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let file = root.appendingPathComponent("demo-credentials.json")
             let data = try JSONSerialization.data(withJSONObject: ["api_key": values[0], "secret_key": values[1], "passphrase": values[2]])
-            try data.write(to: file, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            try SecureCredentialFile.write(data, to: file)
             fields.forEach { $0.stringValue = "" }
             launchServer()
-        } catch { status.stringValue = "配置保存失败，请检查用户目录权限；未记录凭据内容。" }
+        } catch { status.stringValue = "配置保存失败，服务保持停止；请重新填写配置。未保留明文临时副本。" }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -188,6 +188,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate; app.setActivationPolicy(.regular); app.run()
+@main struct DesktopMain {
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate; app.setActivationPolicy(.regular)
+        withExtendedLifetime(delegate) { app.run() }
+    }
+}

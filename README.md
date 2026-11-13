@@ -116,7 +116,7 @@ uv run python scripts/demo_smoke.py --database data/workbench.sqlite3 --credenti
 uv run python scripts/demo_smoke.py --database data/workbench.sqlite3 --credentials-file /secure/path/okx-demo.json --execute-demo --report data/demo-result.json
 ```
 
-脚本固定上限 25 USDT，要求明确模拟盘凭据、读取+交易且无提现权限、无永续持仓/挂单、单向持仓、认证和行情预检通过。按合约最小可成交量开仓，最小量超限即停止，提交前再次限制最小量及名义上限。按真实已完成 K 线选择一组满足快均线大于慢均线的简单规则，经生产 `Engine.execute` 链路触发开仓；查询订单终态与持仓变化，再以 `reduceOnly` 清理本次可归属新增仓位，最终暂停。没有有效期内的做多信号时停止，不补单或伪造行情。报告只有脱敏的信号、合约、数量、成交状态、费用和清理结果。凭据类型/权限不符时停止，不切换实盘。
+脚本固定上限 25 USDT，要求明确模拟盘凭据、读取+交易且无提现权限、无永续持仓/挂单、单向持仓、认证和行情预检通过。按合约最小可成交量开仓，最小量超限即停止，提交前再次限制最小量及名义上限。按真实已完成 K 线选择一组满足快均线大于慢均线的简单规则，经生产 `Engine.execute` 链路触发开仓；查询订单终态与持仓变化，再以 `reduceOnly` 清理本次可归属新增仓位，最终暂停。清理按合法lot/minSz拆分且每笔仍不超过25 USDT；无法拆分或无法确认终态时顶层明确cleanup_incomplete/未通过，不重发未知订单。没有有效期内的做多信号时停止，不补单或伪造行情。报告只有脱敏的信号、合约、数量、成交状态、费用和清理结果。凭据类型/权限不符时停止，不切换实盘。
 
 修复与回归记录见 `docs/REVIEW_FIXES.md`。原始成交记录在 `docs/VALIDATION.md`，本轮修复仅用离线/mock，未重复执行交易。
 

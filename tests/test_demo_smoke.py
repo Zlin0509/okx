@@ -68,17 +68,24 @@ def test_smoke_cleanup_persists_submit_marker_and_only_reduces_owned_position(se
     engine, store, exchange, sid = setup_engine
     exchange.position = "0.16"
     original = exchange.place
+    fills = {}
 
     def fill(body):
         result = original(body)
-        exchange.position = "0"
+        exchange.position = str(Decimal(exchange.position) - Decimal(body["sz"]))
+        fills[body["clOrdId"]] = {"state": "filled", "accFillSz": body["sz"]}
         return result
 
     monkeypatch.setattr(exchange, "place", fill)
+    monkeypatch.setattr(
+        exchange,
+        "order",
+        lambda symbol, oid: {"state": "filled", "accFillSz": "0.16"} if oid == "owned-entry" else fills[oid],
+    )
     monkeypatch.setattr(demo_smoke.time, "sleep", lambda _: None)
     summary = {"symbol": "BTC-USDT-SWAP"}
     demo_smoke.cleanup(engine, sid, "owned-entry", Decimal("0.16"), summary)
-    assert summary["position_after_cleanup"] == "0" and summary["strategy_paused"]
+    assert Decimal(summary["position_after_cleanup"]) == 0 and summary["strategy_paused"]
     assert exchange.submissions[0]["reduceOnly"] is True
     order = store.orders(engine.scope)[0]
     assert order["submit_started"] is not None and order["state"] == "filled"
@@ -180,7 +187,8 @@ def test_masked_order_summary_excludes_full_ids():
     assert result["exchange_id_masked"] == "9876…3456"
 
 
-def test_full_smoke_minimum_signal_fill_account_sync_and_cleanup(tmp_path, monkeypatch):
+@pytest.mark.parametrize("cleanup_failure", [None, "trading", "internal", "unconfirmed"])
+def test_full_smoke_minimum_signal_fill_account_sync_and_cleanup(tmp_path, monkeypatch, cleanup_failure):
     class FilledSmoke(SmokeOKX):
         def __init__(self):
             super().__init__()
@@ -212,10 +220,26 @@ def test_full_smoke_minimum_signal_fill_account_sync_and_cleanup(tmp_path, monke
         demo_smoke, "credentials", lambda *args: {"api_key": "fake", "secret": "fake", "passphrase": "fake"}
     )
     monkeypatch.setattr(demo_smoke.time, "sleep", lambda *args: None)
+    if cleanup_failure:
+
+        def failed_cleanup(*args):
+            if cleanup_failure == "unconfirmed":
+                return
+            if cleanup_failure == "trading":
+                raise demo_smoke.TradingError("cleanup failed", "50011")
+            raise RuntimeError("fake internal failure")
+
+        monkeypatch.setattr(demo_smoke, "cleanup", failed_cleanup)
     result = demo_smoke.run(
         Namespace(credentials_file="unused", database=str(tmp_path / "db.sqlite3"), execute_demo=True)
     )
+    if cleanup_failure:
+        assert result["status"] == "cleanup_incomplete" and result["passed"] is False
+        assert result["cleanup"] == "blocked" and not result["cleanup_complete"]
+        assert result["strategy_paused"] and len(exchange.submissions) == 1
+        return
     assert result["status"] == "filled_and_position_confirmed" and result["cleanup"] == "complete"
+    assert result["passed"] is True
     assert result["minimum_contracts"] == result["submitted_contracts"] == "0.01"
     assert result["position_before"] == result["position_after_cleanup"] == "0"
     assert result["position_after_entry"] == "0.01"
@@ -224,3 +248,26 @@ def test_full_smoke_minimum_signal_fill_account_sync_and_cleanup(tmp_path, monke
     assert result["strategy_paused"] and len(exchange.submissions) == 2
     assert exchange.submissions[-1]["reduceOnly"] is True
     assert result["automatic_post_retries"] == 0 and not result["request_failures"]
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        {"status": "cleanup_incomplete", "cleanup": "blocked", "passed": False},
+        {"status": "filled_and_position_confirmed", "cleanup": "complete", "passed": False},
+        {
+            "status": "filled_and_position_confirmed",
+            "cleanup": "complete",
+            "passed": True,
+            "cleanup_complete": False,
+        },
+    ],
+)
+def test_cleanup_failure_never_exits_with_success(monkeypatch, report):
+    monkeypatch.setattr("sys.argv", ["demo_smoke", "--credentials-file", "unused"])
+    monkeypatch.setattr(
+        demo_smoke,
+        "run",
+        lambda *args: report,
+    )
+    assert demo_smoke.main() == 1

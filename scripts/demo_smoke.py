@@ -169,41 +169,77 @@ def summarize_order(data):
     }
 
 
+MAX_CLEANUP_ORDERS = 20
+
+
+def cleanup_quantity(owned, info, reference_price):
+    """Largest legal <=25 chunk that leaves a legally partitionable remainder."""
+    ct, lot, minimum = (number(info[key]) for key in ("ctVal", "lotSz", "minSz"))
+    if min(ct, lot, minimum, reference_price, owned) <= 0 or quantize(owned, lot) != owned:
+        raise TradingError("新增持仓或合约单位无效，清理未完成")
+    units = int(owned / lot)
+    minimum_units = int((minimum / lot).to_integral_value(rounding=ROUND_CEILING))
+    maximum_units = int(Decimal("25") / (ct * lot * reference_price))
+    if maximum_units < minimum_units:
+        raise TradingError("最小平仓量超过每笔 25 USDT，无法合法拆分，清理未完成")
+    chunks = (units + maximum_units - 1) // maximum_units
+    if units < minimum_units * chunks:
+        raise TradingError("剩余量不能按 lot/minSz 在每笔 25 USDT 内拆分，清理未完成")
+    return Decimal(min(maximum_units, units - (chunks - 1) * minimum_units)) * lot
+
+
+def synchronized_account(exchange, symbol, expected):
+    for _ in range(6):
+        account = exchange.account()
+        if account["pending"]:
+            raise TradingError("检测到挂单，停止清理以免影响其他交易")
+        if position(account, symbol) == expected:
+            return account
+        time.sleep(0.5)
+    raise TradingError("持仓与本次已确认新增量/清理成交不符，清理未完成")
+
+
 def cleanup(engine, sid, entry_id, maximum_filled, summary):
-    """Reduce only the proven new position; preserve any pre-existing or concurrent work."""
+    """Only reduce verified entry fills, and never exceed 25 USDT per order."""
     exchange, store = engine.exchange, engine.store
     symbol = summary["symbol"]
-    engine.store.stop()
+    store.stop()
+    previous_status = summary.get("status", "cleanup_complete")
+    summary.update(status="cleanup_incomplete", passed=False, cleanup="blocked", cleanup_complete=False)
+    summary["cleanup_orders"] = []
+    summary["cleanup_intents"] = []
     entry = exchange.order(symbol, entry_id)
-    if entry.get("state") not in TERMINAL:
+    if entry.get("state") in {"live", "partially_filled"}:
         exchange.cancel(symbol, entry_id)
         entry = confirm(exchange, store, engine.scope, symbol, entry_id)
-    maximum_filled = max(maximum_filled, number(entry.get("accFillSz") or "0"))
+    if entry.get("state") not in TERMINAL:
+        raise TradingError("开仓订单状态不明，禁止新增清理订单，清理未完成")
+    proven = number(entry.get("accFillSz") or "0")
+    if proven < maximum_filled or proven < 0:
+        raise TradingError("开仓成交回报回退或无效，清理未完成")
     summary["entry_order"] = summarize_order(entry)
-    summary["executed"] = maximum_filled > 0
-    summary["cleanup_orders"] = []
-    for attempt in range(3):
-        account = exchange.account()
-        owned = position(account, symbol)
-        if owned == 0:
+    summary["executed"] = proven > 0
+    closed_total = Decimal(0)
+    summary["remaining_proven_contracts"] = str(proven)
+    for attempt in range(MAX_CLEANUP_ORDERS):
+        expected = proven - closed_total
+        account = synchronized_account(exchange, symbol, expected)
+        if expected == 0:
             break
-        if owned < 0 or owned > maximum_filled:
-            raise TradingError("持仓与本次已确认新增量不符，拒绝接管其他交易")
-        if account["pending"]:
-            raise TradingError("检测到并发挂单，停止清理以免影响其他交易")
         info = exchange.instrument(symbol)
-        quantity = quantize(owned, number(info["lotSz"]))
-        if quantity != owned:
-            raise TradingError("新增持仓不能按合约单位平仓，需人工核对")
         quote = exchange.ticker(symbol)
+        bid = number(quote["bidPx"])
         price = quantize(
-            number(quote["bidPx"]) * (1 - engine.settings.slippage_bps / 10_000),
-            number(info["tickSz"]),
-            ROUND_CEILING,
+            bid * (1 - engine.settings.slippage_bps / 10_000), number(info["tickSz"]), ROUND_CEILING
         )
+        if bid <= 0 or price <= 0:
+            raise TradingError("平仓价格无效，清理未完成")
+        quantity = cleanup_quantity(expected, info, max(price, bid))
         client_id = "wc" + hashlib.sha256(f"{entry_id}:{attempt}".encode()).hexdigest()[:30]
         now = time.time()
         with store.locked() as db:
+            if db.execute("SELECT 1 FROM orders WHERE id=?", (client_id,)).fetchone():
+                raise TradingError("已有本次清理意图；必须先对账，不自动重发，清理未完成")
             db.execute(
                 """INSERT INTO orders(id,scope,strategy_id,symbol,side,quantity,price,state,created,updated,intent_version)
                           VALUES(?,?,?,?,'sell',?,?,'reserved',?,?,1)""",
@@ -213,7 +249,14 @@ def cleanup(engine, sid, entry_id, maximum_filled, summary):
             db.execute(
                 "UPDATE orders SET state='submitting',submit_started=? WHERE id=?", (time.time(), client_id)
             )
-            store.audit(db, client_id, "reserved", "submitting", "受限模拟清理提交开始")
+            store.audit(
+                db,
+                client_id,
+                "reserved",
+                "submitting",
+                "受限模拟清理提交开始",
+                evidence={"quantity": str(quantity), "reference_price": str(bid), "cap_usdt": "25"},
+            )
         body = {
             "instId": symbol,
             "tdMode": "isolated",
@@ -225,9 +268,24 @@ def cleanup(engine, sid, entry_id, maximum_filled, summary):
             "reduceOnly": True,
             "clOrdId": client_id,
         }
+        intent = {
+            "client_id_masked": mask_id(client_id),
+            "quantity": str(quantity),
+            "price": str(price),
+            "state": "submitting",
+        }
+        summary["cleanup_intents"].append(intent)
         try:
-            exchange.place(body)
+            receipt = exchange.place(body)
+            intent.update(state="accepted", exchange_id_masked=mask_id(receipt.get("ordId")))
+            with store.locked() as db:
+                db.execute(
+                    "UPDATE orders SET state='accepted',exchange_id=?,updated=? WHERE id=?",
+                    (receipt.get("ordId"), time.time(), client_id),
+                )
+                store.audit(db, client_id, "submitting", "accepted", "清理订单已受理，尚未确认成交")
         except ExchangeRejected as exc:
+            intent.update(state="rejected", code=exc.code)
             with store.locked() as db:
                 db.execute(
                     "UPDATE orders SET state='rejected',error=?,updated=? WHERE id=?",
@@ -241,21 +299,51 @@ def cleanup(engine, sid, entry_id, maximum_filled, summary):
                     "受限清理明确未被受理",
                     evidence={"code": exc.code},
                 )
-            raise TradingError("清理订单被明确拒绝，停止并报告剩余仓位", exc.code) from None
-        except TradingError:
-            # Unknown receipt is resolved only by GET; never resend the same order.
+            raise TradingError("清理订单被明确拒绝，清理未完成", exc.code) from None
+        except Exception:
+            intent["state"] = "unknown"
+            with store.locked() as db:
+                db.execute(
+                    "UPDATE orders SET state='unknown',error=?,updated=? WHERE id=?",
+                    ("清理结果未知；只查单，禁止重发", time.time(), client_id),
+                )
+                store.audit(db, client_id, "submitting", "unknown", "清理结果未知，禁止重发")
+        try:
+            closed = confirm(exchange, store, engine.scope, symbol, client_id)
+        except Exception:
+            intent["state"] = "unknown"
             with store.locked() as db:
                 db.execute("UPDATE orders SET state='unknown',updated=? WHERE id=?", (time.time(), client_id))
-        closed = confirm(exchange, store, engine.scope, symbol, client_id)
-        summary["cleanup_orders"].append(summarize_order(closed))
-        time.sleep(0.5)
-    account = exchange.account()
-    summary["position_after_cleanup"] = str(position(account, symbol))
-    summary["account_after_cleanup"] = account_snapshot(account)
-    summary["pending_orders_after_cleanup"] = len(account["pending"])
-    summary["strategy_paused"] = all(not s["active"] for s in store.strategies())
-    if position(account, symbol) != 0 or account["pending"]:
-        raise TradingError("清理后仍有持仓或挂单，需人工核对")
+                store.audit(db, client_id, "unknown", "unknown", "无法确认清理终态；停止后续下单")
+            raise TradingError("清理订单终态不明，禁止重发，清理未完成") from None
+        filled = number(closed.get("accFillSz") or "0")
+        if not 0 <= filled <= quantity or quantize(filled, number(info["lotSz"])) != filled:
+            intent["state"] = "unknown"
+            with store.locked() as db:
+                db.execute(
+                    "UPDATE orders SET state='unknown',error=? WHERE id=?",
+                    ("清理成交量不符合请求/步长，需核对", client_id),
+                )
+                store.audit(db, client_id, closed.get("state", "unknown"), "unknown", "清理成交量无效，停止")
+            raise TradingError("清理成交量超过本次请求或无效，清理未完成")
+        intent.update(state=closed["state"], filled_contracts=str(filled))
+        closed_total += filled
+        summary["remaining_proven_contracts"] = str(proven - closed_total)
+        summary["cleanup_orders"].append({**summarize_order(closed), "requested_contracts": str(quantity)})
+        summary["confirmed_closed_contracts"] = str(closed_total)
+        # A terminal partial/canceled fill may leave a remainder: synchronize its
+        # exact delta before planning another independently bounded reduceOnly.
+        synchronized_account(exchange, symbol, proven - closed_total)
+    account = synchronized_account(exchange, symbol, proven - closed_total)
+    summary.update(
+        position_after_cleanup=str(position(account, symbol)),
+        account_after_cleanup=account_snapshot(account),
+        pending_orders_after_cleanup=len(account["pending"]),
+        strategy_paused=all(not s["active"] for s in store.strategies()),
+    )
+    if closed_total != proven or position(account, symbol) != 0 or account["pending"]:
+        raise TradingError("受限清理次数已耗尽或仍有残留，清理未完成")
+    summary.update(status=previous_status, cleanup="complete", cleanup_complete=True)
 
 
 def run(args):
@@ -418,15 +506,31 @@ def _run(args):
         if engine and entry_id:
             try:
                 cleanup(engine, sid, entry_id, proven_fill, summary)
-                summary["cleanup"] = "complete"
+                if summary.get("cleanup_complete") is not True:
+                    raise TradingError("无法确认清理完整结束，清理未完成")
             except TradingError as exc:
                 summary.update(
-                    {"cleanup": "blocked", "cleanup_error": str(exc), "cleanup_error_code": exc.code}
+                    {
+                        "status": "cleanup_incomplete",
+                        "passed": False,
+                        "cleanup_complete": False,
+                        "cleanup": "blocked",
+                        "cleanup_error": str(exc),
+                        "cleanup_error_code": exc.code,
+                    }
                 )
             except Exception as exc:
-                summary.update({"cleanup": "blocked", "cleanup_error_type": type(exc).__name__})
+                summary.update(
+                    {
+                        "status": "cleanup_incomplete",
+                        "passed": False,
+                        "cleanup_complete": False,
+                        "cleanup": "blocked",
+                        "cleanup_error_type": type(exc).__name__,
+                    }
+                )
         summary["strategy_paused"] = True
-        if summary.get("permissions"):
+        if summary.get("authentication") == "ok":
             try:
                 summary["final_account"] = account_snapshot(exchange.account())
             except TradingError as exc:
@@ -437,6 +541,10 @@ def _run(args):
                         "final_account_error_code": exc.code,
                     }
                 )
+        summary["passed"] = summary.get("status") == "preflight_only" or (
+            summary.get("status") == "filled_and_position_confirmed"
+            and summary.get("cleanup_complete") is True
+        )
         exchange.close()
     return summary
 
@@ -468,7 +576,15 @@ def main():
     print(output)
     return (
         0
-        if summary.get("status") in {"preflight_only", "filled_and_position_confirmed"}
+        if summary.get("passed") is not False
+        and (
+            summary.get("status") == "preflight_only"
+            or (
+                summary.get("status") == "filled_and_position_confirmed"
+                and summary.get("cleanup_complete") is True
+                and summary.get("passed") is True
+            )
+        )
         and summary.get("cleanup") != "blocked"
         else 1
     )
