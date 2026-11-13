@@ -151,10 +151,17 @@ class OKX:
             raise TradingError("行情已过期")
         return rows[0]
 
-    def account(self):
+    def identity(self):
         configs = self.request("GET", "/api/v5/account/config", private=True)
         if not configs or configs[0].get("posMode") != "net_mode":
             raise TradingError("请先在 OKX 将账户设为单向持仓（net_mode）")
+        uid = configs[0].get("uid")
+        if not isinstance(uid, str) or not uid.isdigit():
+            raise TradingError("OKX 未提供有效账户 UID")
+        return uid
+
+    def account(self):
+        self.identity()
         balances = self.request("GET", "/api/v5/account/balance", {"ccy": "USDT"}, private=True)
         positions = self.request("GET", "/api/v5/account/positions", {"instType": "SWAP"}, private=True)
         pending = self.request("GET", "/api/v5/trade/orders-pending", {"instType": "SWAP"}, private=True)
@@ -190,6 +197,9 @@ class OKX:
         return rows[0]
 
     def cancel(self, symbol, client_id):
-        return self.request(
+        rows = self.request(
             "POST", "/api/v5/trade/cancel-order", body={"instId": symbol, "clOrdId": client_id}, private=True
         )
+        if not rows or str(rows[0].get("sCode")) != "0":
+            raise TradingError("OKX 未确认撤单，请继续查单", rows[0].get("sCode") if rows else None)
+        return rows

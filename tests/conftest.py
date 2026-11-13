@@ -1,5 +1,6 @@
 import time
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -29,6 +30,10 @@ class FakeOKX:
         self.available = "10000"
         self.order_state = "filled"
         self.falling = False
+        self.uid = "12345678"
+
+    def identity(self):
+        return self.uid
 
     def candles(self, symbol, bar):
         return rising_candles(falling=self.falling)
@@ -94,3 +99,10 @@ def setup_engine(tmp_path):
     strategy_id = store.add_strategy(report)
     engine.start(strategy_id)
     return engine, store, exchange, strategy_id
+
+
+@pytest.fixture(autouse=True)
+def isolated_host_and_fresh_clock(tmp_path, monkeypatch):
+    # Never share coordination state with a real local account, or depend on wall-clock minutes.
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setattr(Engine, "now_ms", lambda self: int(time.time() // 3600) * 3_600_000 + 60_000)

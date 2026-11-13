@@ -56,8 +56,7 @@ def test_unknown_order_lookup_failure_remains_blocked(setup_engine):
         raise TradingError("无法确认订单")
 
     exchange.order = not_found
-    with pytest.raises(TradingError):
-        engine.execute(sid)
+    assert engine.execute(sid)["action"] == "duplicate"
     assert store.orders(engine.scope)[0]["state"] == "unknown"
     assert len(exchange.submissions) == 1
 
@@ -125,8 +124,8 @@ def test_stale_candles_block_and_account_switch_requires_regeneration(setup_engi
     engine, store, exchange, sid = setup_engine
     candles = exchange.candles("BTC-USDT-SWAP", "1H")
     exchange.candles = lambda *args: [replace(c, ts=c.ts - 10 * 3_600_000) for c in candles]
-    with pytest.raises(TradingError, match="过期"):
-        engine.execute(sid)
+    assert engine.execute(sid)["action"] == "expired"
+    exchange.uid = "87654321"
     other = Engine(replace(engine.settings, api_key="another-key"), store, exchange)
     with pytest.raises(TradingError, match="账户已改变"):
         other.start(sid)

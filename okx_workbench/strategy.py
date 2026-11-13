@@ -1,10 +1,13 @@
 import math
+import time
 from dataclasses import asdict
+from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .config import BARS, SYMBOLS
+from .config import BARS, SYMBOLS, Settings
 from .market import Candle, TradingError
+from .risk import opening_budget
 
 
 class StrategySpec(BaseModel):
@@ -25,7 +28,7 @@ class StrategySpec(BaseModel):
 class BacktestRequest(StrategySpec):
     initial_capital: float = Field(default=10_000, ge=100, le=10_000_000)
     fee_bps: float = Field(default=5, ge=0, le=100)
-    slippage_bps: float = Field(default=2, ge=0, le=100)
+    slippage_bps: float | None = Field(default=None, ge=0, le=100)
 
 
 def validate_candles(candles, bar):
@@ -59,7 +62,17 @@ def target(candles: list[Candle], spec: StrategySpec):
     }
 
 
-def backtest(candles: list[Candle], spec: StrategySpec, initial=10_000, fee_bps=5, slip_bps=2, trade_start=0):
+def backtest(
+    candles: list[Candle],
+    spec: StrategySpec,
+    initial=10_000,
+    fee_bps=5,
+    slip_bps=None,
+    trade_start=0,
+    limits=None,
+):
+    limits = limits or Settings()
+    slip_bps = float(limits.slippage_bps) if slip_bps is None else slip_bps
     validate_candles(candles, spec.bar)
     if len(candles) < spec.slow + 2:
         raise TradingError("回测样本不足")
@@ -85,8 +98,10 @@ def backtest(candles: list[Candle], spec: StrategySpec, initial=10_000, fee_bps=
         wanted = target(candles[:i], spec)["target"]
         if wanted == "long" and quantity == 0:
             entry = c.open * (1 + slip)
-            budget = cash * spec.allocation
-            quantity = budget / (entry * (1 + fee))
+            budget = float(
+                opening_budget(limits, Decimal(str(cash)), Decimal(str(cash)), Decimal(str(spec.allocation)))
+            )
+            quantity = budget / entry
             entry_fee = quantity * entry * fee
             cash -= quantity * entry + entry_fee
             fees += entry_fee
@@ -109,13 +124,40 @@ def backtest(candles: list[Candle], spec: StrategySpec, initial=10_000, fee_bps=
         "win_rate_pct": sum(t["pnl"] > 0 for t in trades) / len(trades) * 100 if trades else 0,
         "trade_count": len(trades),
         "fees": fees,
+        "risk": {
+            "max_order_usdt": float(limits.max_order),
+            "max_position_usdt": float(limits.max_position),
+            "max_equity_fraction": float(limits.equity_fraction),
+            "initial_effective_budget_usdt": float(
+                opening_budget(
+                    limits, Decimal(str(initial)), Decimal(str(initial)), Decimal(str(spec.allocation))
+                )
+            ),
+            "slippage_bps": slip_bps,
+            "execution_price_offset_bps": float(limits.slippage_bps),
+        },
         "curve": curve,
         "trades": trades,
-        "assumptions": "做多/空仓，信号后下一根开盘成交；末尾强制平仓。含双边手续费和滑点，不含资金费、清算及盘口深度。理论数量未按交易所张数取整。",
+        "snapshot": {
+            "symbol": spec.symbol,
+            "bar": spec.bar,
+            "fast": spec.fast,
+            "slow": spec.slow,
+            "allocation": spec.allocation,
+            "initial_capital": initial,
+            "fee_bps": fee_bps,
+            "slippage_bps": slip_bps,
+            "source": limits.source,
+            "mode": limits.mode,
+            "data_start_ts": candles[max(spec.slow, trade_start)].ts,
+            "data_end_ts": candles[-1].ts,
+            "generated_at_ms": int(time.time() * 1000),
+        },
+        "assumptions": "应用服务端单笔/仓位/权益限额；信号后下一根开盘成交，末尾强制平仓。滑点为单边成本假设，IOC 偏移上限相对实时盘口，二者不等同于相对信号价的实际成本。不含执行延迟、资金费、清算及深度；理论数量未按张数取整。",
     }
 
 
-def generate(candles, base: StrategySpec):
+def generate(candles, base: StrategySpec, limits=None):
     """Small, explainable grid search on training only; untouched chronological holdout."""
     validate_candles(candles, base.bar)
     split = int(len(candles) * 0.7)
@@ -125,12 +167,12 @@ def generate(candles, base: StrategySpec):
     for fast in (4, 8, 12):
         for slow in (18, 24, 36):
             spec = base.model_copy(update={"fast": fast, "slow": slow})
-            report = backtest(candles[:split], spec)
+            report = backtest(candles[:split], spec, limits=limits)
             # Penalize drawdown, do not reward the unused validation partition.
             score = report["return_pct"] - report["max_drawdown_pct"]
             candidates.append((score, spec, report))
     score, chosen, train = max(candidates, key=lambda c: c[0])
-    validation = backtest(candles, chosen, trade_start=split)
+    validation = backtest(candles, chosen, trade_start=split, limits=limits)
     return {
         "spec": chosen.model_dump(),
         "training": train,

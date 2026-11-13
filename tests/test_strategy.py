@@ -43,7 +43,8 @@ def test_no_future_prices_used_in_prior_curve_or_selection():
     assert original["curve"][:200] == changed["curve"][:200]
     first, second = generate(candles, spec), generate(modified, spec)
     assert first["spec"] == second["spec"]
-    assert first["training"] == second["training"]
+    assert first["training"]["curve"] == second["training"]["curve"]
+    assert first["training"]["trades"] == second["training"]["trades"]
     assert len(first["validation"]["curve"]) == first["validation_bars"]
 
 

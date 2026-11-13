@@ -9,7 +9,7 @@ from typing import Literal
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import BARS, SYMBOLS, Settings
@@ -24,6 +24,14 @@ STATIC = Path(__file__).parent / "static"
 class StartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     confirmation: Literal["START_OFFLINE", "START_DEMO", "START_LIVE"]
+    control_epoch: int = Field(ge=0)
+
+
+class RecoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operator: str = Field(min_length=2, max_length=80)
+    reason: str = Field(min_length=12, max_length=500)
+    confirmation: Literal["ABANDON_WITHOUT_RESEND"]
 
 
 def create_app(settings=None, exchange=None):
@@ -44,6 +52,11 @@ def create_app(settings=None, exchange=None):
             lock_file.close()
             raise RuntimeError("此数据库已有服务进程运行，请只使用一个 worker") from None
         store.stop()
+        try:
+            await asyncio.to_thread(engine.reconcile, True)
+        except TradingError as exc:
+            engine.startup_error = str(exc)
+            store.event("启动对账失败：" + str(exc), "error")
         stop = asyncio.Event()
 
         async def run():
@@ -108,6 +121,7 @@ def create_app(settings=None, exchange=None):
                     "spec": r["spec"],
                     "active": bool(r["active"]),
                     "source": r["report"].get("source"),
+                    "last_signal": json.loads(r["last_signal"]) if r["last_signal"] else None,
                     "validation": {
                         k: v for k, v in r["report"]["validation"].items() if k not in {"curve", "trades"}
                     },
@@ -120,13 +134,18 @@ def create_app(settings=None, exchange=None):
             "symbols": SYMBOLS,
             "bars": list(BARS),
             "strategies": strategies,
-            "orders": store.orders(engine.scope),
+            "orders": store.orders(engine.view_scope),
+            "blockers": store.unresolved(engine.view_scope),
+            "startup_error": engine.startup_error,
+            "live_supported": False,
+            "control_epoch": store.control_epoch(),
             "events": store.events(),
             "risk": {
                 "max_order_usdt": str(settings.max_order),
                 "max_position_usdt": str(settings.max_position),
                 "max_equity_fraction": str(settings.equity_fraction),
                 "slippage_bps": str(settings.slippage_bps),
+                "max_signal_age_seconds": settings.max_signal_age_seconds,
             },
         }
 
@@ -147,7 +166,7 @@ def create_app(settings=None, exchange=None):
 
     @app.post("/api/strategies/generate")
     def generate_strategy(spec: StrategySpec):
-        report = generate(engine.candles(spec.symbol, spec.bar), spec)
+        report = generate(engine.candles(spec.symbol, spec.bar), spec, settings)
         report.update({"source": settings.source, "scope": engine.scope})
         report["id"] = store.add_strategy(report)
         store.event(f"已生成策略 #{report['id']}；未启动交易")
@@ -156,7 +175,12 @@ def create_app(settings=None, exchange=None):
     @app.post("/api/backtests")
     def run_backtest(spec: BacktestRequest):
         result = backtest(
-            engine.candles(spec.symbol, spec.bar), spec, spec.initial_capital, spec.fee_bps, spec.slippage_bps
+            engine.candles(spec.symbol, spec.bar),
+            spec,
+            spec.initial_capital,
+            spec.fee_bps,
+            spec.slippage_bps,
+            limits=settings,
         )
         result["source"] = settings.source
         result["id"] = store.save_backtest(spec.model_dump(), result)
@@ -169,9 +193,16 @@ def create_app(settings=None, exchange=None):
         if not row:
             return JSONResponse({"detail": "回测不存在"}, status_code=404)
         output = io.StringIO()
-        writer = csv.DictWriter(output, fieldnames=["ts", "equity"])
+        result = json.loads(row["result"])
+        snapshot = result.get("snapshot", {})
+        metadata = {
+            "backtest_id": backtest_id,
+            **snapshot,
+            **{f"risk_{k}": v for k, v in result.get("risk", {}).items()},
+        }
+        writer = csv.DictWriter(output, fieldnames=["ts", "equity", *metadata])
         writer.writeheader()
-        writer.writerows(json.loads(row["result"])["curve"])
+        writer.writerows({**point, **metadata} for point in result["curve"])
         return Response(
             output.getvalue(),
             media_type="text/csv",
@@ -183,7 +214,7 @@ def create_app(settings=None, exchange=None):
         expected = "START_OFFLINE" if settings.source == "offline" else "START_" + settings.mode.upper()
         if body.confirmation != expected:
             raise TradingError("启动确认与当前交易环境不符")
-        engine.start(strategy_id)
+        engine.start(strategy_id, body.control_epoch)
         return {"active": strategy_id, "mode": settings.mode, "source": settings.source}
 
     @app.post("/api/strategies/{strategy_id}/tick")
@@ -198,11 +229,37 @@ def create_app(settings=None, exchange=None):
     def stop():
         store.stop()
         store.event("已暂停全部策略；已有仓位与交易所订单请在 OKX 处理")
-        return {"stopped": True, "note": "仅停止后续信号执行，未平仓或撤单"}
+        return {
+            "stopped": True,
+            "control_epoch": store.control_epoch(),
+            "note": "仅停止后续信号执行，未平仓或撤单",
+        }
+
+    @app.get("/api/strategies/{strategy_id}/signal")
+    def preview_signal(strategy_id: int):
+        row = next((s for s in store.strategies() if s["id"] == strategy_id), None)
+        if not row:
+            raise TradingError("策略不存在")
+        return engine.signal(StrategySpec(**row["spec"]))
 
     @app.post("/api/orders/reconcile")
     def reconcile():
-        return {"orders": engine.reconcile()}
+        store.stop()
+        return {"orders": engine.reconcile(recover_unsent=True), "strategy_paused": True}
+
+    @app.post("/api/orders/{client_id}/abandon")
+    def abandon(client_id: str, body: RecoveryRequest):
+        return engine.abandon(client_id, body.operator, body.reason, body.confirmation)
+
+    @app.get("/api/orders/{client_id}/audit")
+    def audit(client_id: str):
+        with store.connect() as db:
+            exists = db.execute(
+                "SELECT 1 FROM orders WHERE id=? AND scope=?", (client_id, engine.view_scope)
+            ).fetchone()
+        if not exists:
+            return JSONResponse({"detail": "订单不存在"}, status_code=404)
+        return {"audit": store.audit_history(client_id)}
 
     @app.post("/api/orders/{client_id}/cancel")
     def cancel(client_id: str):

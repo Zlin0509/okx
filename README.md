@@ -39,18 +39,15 @@ OKX_PASSPHRASE=你的Passphrase
 
 支持 BTC-USDT-SWAP、ETH-USDT-SWAP，1H / 4H / 1D，USDT 本位线性永续；目标合约只接管单向逐仓多仓。已有空仓、全仓或双向持仓会被拒绝。请不要让软件接管同合约的人工作业仓位。
 
-## 实盘必须显式开启
+## 账户互斥与实盘禁用
 
-默认不连接实盘。本次仅在用户授权的 OKX 模拟账户完成受限交易验证，未连接实盘。用户决定启用实盘时，需在服务端同时配置：
+**本版禁止实盘启动**。即使配置 `OKX_MODE=live`、完整确认短语和凭据，配置校验也会拒绝。当前没有跨主机协调器和 fencing（阻止旧实例继续下单的机制），不能提供跨主机账户级去重与总限额保证；没有环境变量可绕过。此前模拟账户验证不等于实盘验收。
 
-```dotenv
-OKX_MODE=live
-OKX_DATA_SOURCE=okx
-OKX_LIVE_ACK=I_UNDERSTAND_LIVE_TRADING_USES_REAL_FUNDS
-# 同时换为实盘账户的凭据
-```
+模拟盘从已认证 `/account/config` 的 UID 建立稳定 scope 和客户端订单号，更换同账户 API Key 不改变去重身份。同一主机、同一 OS 用户使用固定目录 `~/.local/share/okx-workbench/accounts.sqlite3`，以 SQLite 原子绑定一个 UID 到一个规范数据库路径；第二数据库/Key 会被拒绝，原数据库内通过写锁和唯一键串行处理。绑定不随服务退出释放，恢复时继续使用原数据库，不要删除协调记录或订单账本。
 
-缺少确认短语时服务拒绝启动。控制台没有环境切换接口；实盘界面持续显示红色标识，启动前另需手动输入 `START_LIVE`。本次已完成受限模拟账户开仓与平仓联调，实盘能力仍需人工审查。
+这是**单主机、单 OS 用户、同一持久化目录**的模拟盘约束，不是分布式锁。不同主机、OS 用户、容器独立目录或 NFS 场景不能保证互斥；这些部署不支持实盘。独立机器人和人工交易不在本机协调范围，模拟盘仍须使用独立子账户。切换不同 UID 需要独立数据库。
+
+旧版当前 Key 的意图迁移到已认证 UID，原订单 ID 不变并保留迁移审计；迁移前最后一次下单时间之前的信号禁止重放。存在其他旧版 Key 的未核对记录时拒绝执行，需先用原 Key 完成 UID 迁移，不能通过换 Key 隐藏旧意图。
 
 ## 策略和回测口径
 
@@ -58,6 +55,9 @@ OKX_LIVE_ACK=I_UNDERSTAND_LIVE_TRADING_USES_REAL_FUNDS
 - 自动生成搜索 9 组均线参数，仅用前 70% 连续 K 线按“收益率减最大回撤”选参，后 30% 独立验证。它是可解释的规则搜索，不是大模型预测或收益承诺。
 - 使用最近最多 300 根 K 线，过滤未完成 K 线并验证时间连续。不是长历史研究系统。1D 在 OKX 按交易所默认日线边界；离线按 UTC 生成。
 - 回测从上一根收盘获取信号，下一根开盘成交；最后一根收盘强制平仓。计算净收益、权益曲线、最大回撤、交易胜率、交易数和手续费，可导出权益 CSV。
+- 全样本、训练和样本外回测共用执行引擎预算函数，应用服务端单笔、总仓位、权益比例和可用余额限额。10,000 USDT、5% 策略预算、默认单笔上限 100 USDT 时，有效初始名义预算为 100 USDT（1%），不再按 500 USDT 回测。
+- 回测默认单边滑点成本假设与服务端 `MAX_SLIPPAGE_BPS` 数值一致（默认 20 bps），可更改场景假设。IOC 偏移上限相对实时盘口，不是相对信号收盘价的成本，不能保证实际成本与回测相同；执行延迟未建模。
+- 每份结果保存合约、周期、均线、预算、初始资金、手续费、滑点、数据区间和生成时间。输入变动立即标记上次回测；旧收益与 CSV 始终对应保存的快照，重新回测才更新。
 - 理论回测含双边手续费和滑点，不含资金费、清算、实际盘口深度；连续数量未按合约张数取整。实际执行受最小张数约束，不能直接用回测收益推断模拟盘或实盘收益。
 - 离线账户：初始 10,000 USDT、固定单边 5 bps 费用，显示累计已实现收益减全部手续费及当前未实现盈亏。
 - OKX 账户：权益、可用余额与未实现盈亏来自账户接口；“已实现净收益”取最近最多 100 条成交的平仓盈亏 + USDT 手续费/返佣 + 最近最多 100 条资金费账单，窗口不同，**不是账户累计收益或存取款调整后的收益率**。接口保留期和返回记录不足时按实际可见窗口显示。离线、回测、真实账户口径在界面分别标注。
@@ -68,13 +68,18 @@ OKX_LIVE_ACK=I_UNDERSTAND_LIVE_TRADING_USES_REAL_FUNDS
 
 合约张数从 OKX `ctVal`、`lotSz`、`minSz` 计算并向下取整，价格按 `tickSz` 取整。使用在实时买一/卖一附近、受价格偏移上限约束的 IOC 限价单，避免无界市价成交。IOC 可能部分成交或取消；提交成功仅标为 `accepted`，后续通过查询订单获取实际状态。实际滑点相对信号价仍受信号到执行的时间差影响。
 
-本地 SQLite 在请求发出前持久化 `reserved` 意图；`clOrdId` 由环境、数据源、API Key 指纹、合约、周期、K 线时间和方向确定，不随策略重建改变。唯一键 + 数据库写锁防止并发重复提交。
+SQLite 先提交 `reserved` 意图，再独立提交 `submitting` / `submit_started` 标记，最后才允许 POST；网络请求后的崩溃回滚不能抹掉提交开始标记。在线 `clOrdId` 由环境、账户 UID、合约、周期、K 线时间和方向确定，不随策略或 Key 重建改变。唯一键与数据库写锁防止并发重复提交。
 
 - 请求超时、断网或响应不完整 → `unknown`，暂停策略，**不自动重发**。
-- 点击“订单对账”按 `clOrdId` 查询；未结束和未知订单阻止后续开仓。可对已确认挂单发出撤单并再次查单。
-- 查无订单不等于未下单。若长时间查不到，保持停单，先在 OKX 核对历史订单和成交，再由维护者审计意图记录；界面不提供跳过未知订单的按钮。
-- 重启服务后全部策略暂停，必须手动重新启动。切换账户/数据源需重新生成策略。
+- 服务启动先暂停并逐笔对账，单笔失败不遮住其他订单。“订单对账”同样先暂停，未结束和未知订单持续显示在总览阻断区。撤单检查每笔返回码。
+- 新版确定未提交的 `reserved`、离线未完成事务可安全转为 `canceled_local` 并保留去重；旧版意图或已有提交标记的订单必须按不确定结果查单。
+- 只有连续三次明确返回 51603 的 `unknown`，才显示“人工审计解除”。先在 OKX 核对历史订单/成交，填写操作人和至少 12 字依据，并输入 `ABANDON_WITHOUT_RESEND`。服务端再次查单并核对无挂单、目标合约无持仓，才转为 `abandoned`；审计保存原状态、操作人、依据和核对结果。网络/权限错误、已有订单或挂单/持仓均不可解除。
+- **解除不是重试**：原订单及去重键不删除，同一信号仍不能重发，策略保持暂停。查无订单不证明未成交；人工依据仍需真实核对，存在歧义继续停单。
+- 重启后全部策略暂停；同账户换 Key 保留 UID 去重，不同账户或数据源需重新生成策略。
 - “暂停全部策略”停止后续下单，可能等待当前已开始的请求结束；**不会自动平仓或撤销已有订单**。未知订单按上述流程处理，仓位应在 OKX 人工管理。
+- 暂停递增数据库控制版本，原子作废此前未完成的启动。HTTP 启动需携带 `/api/state` 的最新 `control_epoch`，过期请求返回 409；前端忽略已作废响应，不追加 tick。
+- 所有周期仅在收盘后 `MAX_SIGNAL_AGE_SECONDS` 内执行（默认/最大 300 秒）。过期或超前信号返回年龄和等待提示，不补单；持续运行的策略等待下一根有效信号，手动执行同样受限。
+- 断连后持续显示待同步及最后同步时间，金额清空，启动/手动执行禁用。暂停 POST 确认与后续刷新失败分别反馈。
 - `data/` 包含持仓账本、意图和审计记录，应持久化和备份。不要删除数据库或运行多个数据库实例连接同一账户；新数据库不能替代旧意图记录。`.env` 和 `data/` 均被 Git 忽略。
 
 本机接口有 Host 校验、同源检查、JSON 写请求和 CSP，防止网页跨站调用。它不是多人访问控制系统。首版没有交易所端止损、日亏损熔断、WebSocket 推送、长历史分页研究和完整资金流水归因。
@@ -90,7 +95,7 @@ node --check okx_workbench/static/app.js
 
 测试采用 HTTP Mock 与临时数据库，无需密钥，不发送真实订单。GitHub Actions 使用 Python 3.11 / 3.14。详细验证记录见 `docs/VALIDATION.md`。
 
-主要接口：`GET /api/state`、`GET /api/market`、`GET /api/account`、`POST /api/strategies/generate`、`POST /api/backtests`、`GET /api/backtests/{id}/export.csv`、`POST /api/strategies/{id}/start`、`POST /api/strategies/{id}/tick`、`POST /api/orders/reconcile`、`POST /api/orders/{id}/cancel`、`POST /api/stop`。写请求均需 `Content-Type: application/json`；启动体为 `{"confirmation":"START_OFFLINE"}` / `START_DEMO` / `START_LIVE`。
+主要接口：`GET /api/state`、`GET /api/market`、`GET /api/account`、`POST /api/strategies/generate`、`POST /api/backtests`、`GET /api/backtests/{id}/export.csv`、`POST /api/strategies/{id}/start`、`POST /api/strategies/{id}/tick`、`POST /api/orders/reconcile`、`POST /api/orders/{id}/cancel`、`POST /api/stop`。写请求均需 `Content-Type: application/json`；启动体示例 `{"confirmation":"START_OFFLINE","control_epoch":12}`，版本从最新 `/api/state` 读取；模拟盘确认用 `START_DEMO`。另有 `GET /api/strategies/{id}/signal`、`POST /api/orders/{id}/abandon`、`GET /api/orders/{id}/audit` 提供信号预览和带审计恢复。
 
 实现依据：[OKX V5 官方接口文档](https://www.okx.com/docs-v5/en/)（签名、模拟盘、合约单位、订单状态与账户接口；2026-11-13 核对）。
 
@@ -105,4 +110,6 @@ uv run python scripts/demo_smoke.py --credentials-file /secure/path/okx-demo.jso
 uv run python scripts/demo_smoke.py --credentials-file /secure/path/okx-demo.json --execute-demo --report data/demo-result.json
 ```
 
-脚本固定上限 25 USDT，仅在无永续持仓、无挂单、单向持仓、认证和行情预检通过时继续。按真实已完成 K 线选择一组满足快均线大于慢均线的简单规则，经生产 `Engine.execute` 链路触发开仓；查询订单终态与持仓变化，再以 `reduceOnly` 清理本次可归属新增仓位，最终暂停。没有做多信号时停止，不伪造行情。报告只有脱敏的信号、合约、数量、成交状态、费用和清理结果。凭据类型/权限不符时停止，不切换实盘。
+脚本固定上限 25 USDT，仅在无永续持仓、无挂单、单向持仓、认证和行情预检通过时继续。按真实已完成 K 线选择一组满足快均线大于慢均线的简单规则，经生产 `Engine.execute` 链路触发开仓；查询订单终态与持仓变化，再以 `reduceOnly` 清理本次可归属新增仓位，最终暂停。没有有效期内的做多信号时停止，不补单或伪造行情。报告只有脱敏的信号、合约、数量、成交状态、费用和清理结果。凭据类型/权限不符时停止，不切换实盘。
+
+修复与回归记录见 `docs/REVIEW_FIXES.md`。原始成交记录在 `docs/VALIDATION.md`，本轮修复仅用离线/mock，未重复执行交易。

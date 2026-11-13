@@ -16,7 +16,8 @@ def test_live_requires_explicit_ack_and_official_domain_only():
         Settings(mode="live", source="okx")
     with pytest.raises(ValueError):
         Settings(mode="live", live_ack=LIVE_ACK)
-    assert Settings(mode="live", source="okx", live_ack=LIVE_ACK).mode == "live"
+    with pytest.raises(ValueError, match="跨主机"):
+        Settings(mode="live", source="okx", live_ack=LIVE_ACK)
     with pytest.raises(ValueError):
         Settings(base_url="https://attacker.example")
     with pytest.raises(ValueError):
@@ -103,4 +104,16 @@ def test_malformed_receipt_is_uncertain_not_rejected():
     with pytest.raises(TradingError) as error:
         client.place({})
     assert not isinstance(error.value, ExchangeRejected)
+    client.close()
+
+
+def test_cancel_nested_error_is_not_reported_as_success():
+    settings = replace(Settings(), api_key="mock-key", secret="mock-secret", passphrase="mock-pass")
+    client = OKX(
+        settings,
+        httpx.MockTransport(lambda r: httpx.Response(200, json={"code": "0", "data": [{"sCode": "51400"}]})),
+    )
+    with pytest.raises(TradingError) as exc:
+        client.cancel("BTC-USDT-SWAP", "only-owned-order")
+    assert exc.value.code == "51400"
     client.close()

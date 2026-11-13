@@ -21,11 +21,23 @@ def test_full_offline_workflow_and_restart(tmp_path):
         assert csv.status_code == 200 and "ts,equity" in csv.text
         assert len(csv.text.splitlines()) == len(report["curve"]) + 1
         assert (
-            client.post(f"/api/strategies/{sid}/start", json={"confirmation": "START_LIVE"}).status_code
+            client.post(
+                f"/api/strategies/{sid}/start",
+                json={
+                    "confirmation": "START_LIVE",
+                    "control_epoch": client.get("/api/state").json()["control_epoch"],
+                },
+            ).status_code
             == 409
         )
         assert (
-            client.post(f"/api/strategies/{sid}/start", json={"confirmation": "START_OFFLINE"}).status_code
+            client.post(
+                f"/api/strategies/{sid}/start",
+                json={
+                    "confirmation": "START_OFFLINE",
+                    "control_epoch": client.get("/api/state").json()["control_epoch"],
+                },
+            ).status_code
             == 200
         )
         first = client.post(f"/api/strategies/{sid}/tick", json={})
@@ -35,7 +47,13 @@ def test_full_offline_workflow_and_restart(tmp_path):
         assert account["equity"] == account["initial_capital"] + account["net_pnl"]
         assert client.post("/api/stop", json={}).json()["stopped"]
         assert client.post(f"/api/strategies/{sid}/tick", json={}).status_code == 409
-        client.post(f"/api/strategies/{sid}/start", json={"confirmation": "START_OFFLINE"})
+        client.post(
+            f"/api/strategies/{sid}/start",
+            json={
+                "confirmation": "START_OFFLINE",
+                "control_epoch": client.get("/api/state").json()["control_epoch"],
+            },
+        )
     with TestClient(create_app(settings)) as restarted:
         assert not restarted.get("/api/state").json()["strategies"][0]["active"]
 

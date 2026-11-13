@@ -37,6 +37,9 @@
         </div>
       </header>
       <section id="overview" class="overview">
+        <div id="connection-notice" class="notice" role="status">
+          正在同步执行状态…
+        </div>
         <div class="eyebrow">SYSTEMATIC TRADING / 系统化交易</div>
         <div class="page-title">
           <div>
@@ -46,6 +49,7 @@
           <button class="button subtle" id="refresh">↻ 刷新数据</button>
         </div>
         <div id="source-notice" class="notice">正在读取数据源…</div>
+        <div id="blocker-notice" class="notice hidden" role="alert"></div>
         <div class="metrics">
           <article>
             <div class="metric-label">账户权益 <span>USDT</span></div>
@@ -65,7 +69,8 @@
           </article>
           <article>
             <div class="metric-label">
-              执行状态 <span class="status-dot"></span>
+              执行状态
+              <span id="execution-dot" class="status-dot inactive"></span>
             </div>
             <strong id="execution-state" class="state-text">待配置</strong
             ><small id="active-note">生成策略后手动启动</small>
@@ -224,7 +229,7 @@
               min="0"
               max="100"
               step="0.1"
-              value="2" /></label
+              value="20" /></label
           ><button id="backtest" class="button dark">运行完整回测 ↗</button>
         </div>
         <div class="backtest-summary" id="backtest-summary">
@@ -234,6 +239,10 @@
           <div><span>完成交易</span><strong>—</strong></div>
           <div><span>手续费 / USDT</span><strong>—</strong></div>
         </div>
+        <p id="backtest-snapshot" class="footnote">尚无回测参数快照。</p>
+        <p id="backtest-stale" class="notice hidden" role="status">
+          参数已修改，当前结果和 CSV 来自上次回测，请重新运行。
+        </p>
         <div
           id="equity-chart"
           class="chart equity-chart"
@@ -300,6 +309,44 @@
           <button class="button subtle" value="cancel">返回检查</button
           ><button id="confirm-start" class="button dark" type="button">
             确认启动
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="recovery-dialog">
+      <form id="recovery-form">
+        <h2>人工解除异常订单</h2>
+        <p id="recovery-description"></p>
+        <p>
+          先在 OKX
+          核对历史订单和成交。解除仅取消本地阻断，原信号仍禁止重发，策略继续暂停。
+        </p>
+        <label
+          >操作人（本机审计标签）<input
+            id="recovery-operator"
+            required
+            minlength="2"
+            maxlength="80"
+        /></label>
+        <label
+          >核对依据与原因<textarea
+            id="recovery-reason"
+            required
+            minlength="12"
+            maxlength="500"
+          ></textarea>
+        </label>
+        <label
+          >输入 ABANDON_WITHOUT_RESEND 确认<input
+            id="recovery-confirm"
+            required
+            autocomplete="off"
+        /></label>
+        <div class="dialog-actions">
+          <button class="button subtle" id="cancel-recovery" type="button">
+            返回核对</button
+          ><button class="button dark" id="confirm-recovery" type="submit">
+            解除并保留审计
           </button>
         </div>
       </form>

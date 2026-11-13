@@ -1,13 +1,16 @@
 import hashlib
 import json
+import threading
 import time
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 
 from .config import BARS
+from .coordination import account_scope, bind_account
 from .market import ExchangeRejected, TradingError, fixture, number
+from .risk import opening_budget
 from .strategy import StrategySpec, target, validate_candles
 
-UNRESOLVED = ("reserved", "unknown", "accepted", "live", "partially_filled")
+UNRESOLVED = ("reserved", "submitting", "unknown", "accepted", "live", "partially_filled")
 TERMINAL = {"filled", "canceled", "mmp_canceled"}
 
 
@@ -21,9 +24,28 @@ class Engine:
     def __init__(self, settings, store, exchange):
         self.settings, self.store, self.exchange = settings, store, exchange
         identity = hashlib.sha256(settings.api_key.encode()).hexdigest()[:16]
-        self.scope = f"{settings.mode}:{settings.source}:{identity}"
+        self.legacy_scope = f"{settings.mode}:{settings.source}:{identity}"
+        self._scope = self.legacy_scope if settings.source == "offline" else None
+        self._identity_lock = threading.Lock()
+        self.startup_error = None
         with store.connect() as db:
-            db.execute("INSERT OR IGNORE INTO paper(scope,cash) VALUES(?,10000)", (self.scope,))
+            if settings.source == "offline":
+                db.execute("INSERT OR IGNORE INTO paper(scope,cash) VALUES(?,10000)", (self.scope,))
+
+    @property
+    def scope(self):
+        with self._identity_lock:
+            if self._scope is None:
+                scope = account_scope(self.settings.mode, self.exchange.identity())
+                bind_account(self.settings.account_state_dir, scope, self.store.path)
+                self.store.migrate_scope(self.legacy_scope, scope)
+                self._scope = scope
+                self.startup_error = None
+            return self._scope
+
+    @property
+    def view_scope(self):
+        return self._scope or self.legacy_scope
 
     def candles(self, symbol, bar):
         candles = (
@@ -75,10 +97,16 @@ class Engine:
             "scope_note": "成交和资金费各取最近最多 100 条（交易所保留期内），窗口不同；非累计收益，不含未实现盈亏。",
         }
 
-    def start(self, strategy_id):
+    def start(self, strategy_id, expected_epoch=None):
+        epoch = self.store.begin_start(expected_epoch)
         if self.settings.source == "okx":
             self.exchange.account()  # Credentials and net-mode preflight.
+        self.reconcile(recover_unsent=True)
+        if self.store.unresolved(self.scope):
+            raise TradingError("存在未结束或异常订单；请先对账或完成带审计的人工解除")
         with self.store.locked() as db:
+            if db.execute("SELECT epoch FROM control WHERE id=1").fetchone()[0] != epoch:
+                raise TradingError("启动请求已被暂停或另一操作作废，请刷新后重新确认")
             row = db.execute("SELECT * FROM strategies WHERE id=?", (strategy_id,)).fetchone()
             if not row:
                 raise TradingError("策略不存在")
@@ -90,31 +118,119 @@ class Engine:
             f"策略 #{strategy_id} 已启动；数据源 {self.settings.source}，环境 {self.settings.mode}"
         )
 
-    def reconcile(self):
-        if self.settings.source == "offline":
-            return []
+    def reconcile(self, recover_unsent=False):
         results = []
-        # Reserve is durable before POST. A crash or timeout can only be resolved by GET, never resend.
-        for order in self.store.orders(self.scope):
-            if order["state"] not in UNRESOLVED:
-                continue
-            data = self.exchange.order(order["symbol"], order["id"])
-            state = data.get("state", "unknown")
-            if state not in TERMINAL | {"live", "partially_filled"}:
-                state = "unknown"
+        # Keep the database lock through each lookup. A submit and reconcile must
+        # never change the same intent concurrently; failure is isolated per order.
+        for candidate in self.store.unresolved(self.scope):
             with self.store.locked() as db:
-                db.execute(
-                    "UPDATE orders SET state=?,exchange_id=?,filled=?,updated=?,error=NULL WHERE id=?",
-                    (
-                        state,
-                        data.get("ordId"),
-                        str(number(data.get("accFillSz") or "0")),
-                        time.time(),
-                        order["id"],
-                    ),
+                order = dict(db.execute("SELECT * FROM orders WHERE id=?", (candidate["id"],)).fetchone())
+                if order["state"] not in UNRESOLVED:
+                    continue
+                reason, code, count = None, None, 0
+                state, exchange_id, filled = order["state"], order["exchange_id"], order["filled"]
+                safe_unsent = (
+                    order["state"] == "reserved"
+                    and order["intent_version"] == 1
+                    and order["submit_started"] is None
                 )
-            results.append({"id": order["id"], "state": state})
+                if safe_unsent and not recover_unsent:
+                    continue
+                if self.settings.source == "offline" or safe_unsent:
+                    state, reason = "canceled_local", "未提交意图已取消；保留原信号去重，不重发"
+                else:
+                    try:
+                        data = self.exchange.order(order["symbol"], order["id"])
+                        state = data.get("state", "unknown")
+                        if state not in TERMINAL | {"live", "partially_filled"}:
+                            state = "unknown"
+                        exchange_id, filled = data.get("ordId"), str(number(data.get("accFillSz") or "0"))
+                    except Exception as exc:
+                        state = "unknown"
+                        code = exc.code if isinstance(exc, TradingError) else None
+                        count = order["not_found_count"] + 1 if code == "51603" else 0
+                        reason = (
+                            "查无订单；需人工核对后解除，禁止重发"
+                            if code == "51603"
+                            else "查单失败，继续停单；请重试对账"
+                        )
+                db.execute(
+                    "UPDATE orders SET state=?,exchange_id=?,filled=?,updated=?,error=?,last_error_code=?,not_found_count=? WHERE id=?",
+                    (state, exchange_id, filled, time.time(), reason, code, count, order["id"]),
+                )
+                self.store.audit(
+                    db,
+                    order["id"],
+                    order["state"],
+                    state,
+                    reason or "查单更新",
+                    evidence={"error_code": code, "not_found_count": count, "filled": filled},
+                )
+            results.append({"id": order["id"], "state": state, "error": reason, "code": code})
         return results
+
+    def abandon(self, client_id, operator, reason, confirmation):
+        if confirmation != "ABANDON_WITHOUT_RESEND" or len(operator.strip()) < 2 or len(reason.strip()) < 12:
+            raise TradingError("人工解除需操作人、核对依据及准确确认短语")
+        self.store.stop()
+        scope = self.scope
+        with self.store.locked() as db:
+            row = db.execute("SELECT * FROM orders WHERE id=? AND scope=?", (client_id, scope)).fetchone()
+            if (
+                not row
+                or row["state"] != "unknown"
+                or row["not_found_count"] < 3
+                or row["last_error_code"] != "51603"
+            ):
+                raise TradingError("仅可解除连续三次明确查无订单的 unknown；网络或认证错误不符合条件")
+            try:
+                self.exchange.order(row["symbol"], client_id)
+            except TradingError as exc:
+                if exc.code != "51603":
+                    raise TradingError("最新查单未明确返回查无订单，保持停单") from None
+            else:
+                raise TradingError("交易所已找到订单，请先对账，禁止人工作废")
+            account = self.exchange.account()
+            if account["pending"] or any(
+                p["instId"] == row["symbol"] and number(p.get("pos") or "0") != 0
+                for p in account["positions"]
+            ):
+                raise TradingError("账户有挂单或目标合约持仓，不能确认安全解除")
+            evidence = {
+                "code": "51603",
+                "consecutive_not_found": row["not_found_count"],
+                "pending": 0,
+                "target_position": "0",
+            }
+            self.store.audit(
+                db,
+                client_id,
+                row["state"],
+                "abandoned",
+                reason.strip(),
+                actor=operator.strip(),
+                evidence=evidence,
+            )
+            db.execute(
+                "UPDATE orders SET state='abandoned',error=?,updated=? WHERE id=?",
+                ("人工解除；原信号永久保留去重，未重发", time.time(), client_id),
+            )
+        return {"id": client_id, "state": "abandoned", "resubmitted": False, "strategy_paused": True}
+
+    def signal(self, spec):
+        signal = target(self.candles(spec.symbol, spec.bar), spec)
+        age_ms = self.now_ms() - (signal["candle_ts"] + BARS[spec.bar])
+        signal.update(
+            {
+                "age_seconds": age_ms / 1000,
+                "max_age_seconds": self.settings.max_signal_age_seconds,
+                "executable": 0 <= age_ms <= self.settings.max_signal_age_seconds * 1000,
+            }
+        )
+        return signal
+
+    def now_ms(self):
+        return int(time.time() * 1000)
 
     def execute(self, strategy_id):
         self.reconcile()
@@ -123,11 +239,17 @@ class Engine:
         if not row or not row["active"]:
             raise TradingError("策略未启动")
         spec = StrategySpec(**row["spec"])
-        candles = self.candles(spec.symbol, spec.bar)
-        signal = target(candles, spec)
-        age = int(time.time() * 1000) - (signal["candle_ts"] + BARS[spec.bar])
-        if age < 0 or age > BARS[spec.bar] + 60_000:
-            raise TradingError("K 线已过期或时间超前，拒绝执行")
+        signal = self.signal(spec)
+        with self.store.connect() as db:
+            db.execute("UPDATE strategies SET last_signal=? WHERE id=?", (json.dumps(signal), strategy_id))
+        if not signal["executable"]:
+            return {
+                "action": "expired",
+                "signal": signal,
+                "note": "信号超出有效期或时间超前；等待下一根已完成 K 线，不补单",
+            }
+        if (signal["candle_ts"] + BARS[spec.bar]) / 1000 <= self.store.legacy_cutoff(self.scope):
+            return {"action": "legacy_signal_blocked", "signal": signal, "note": "旧版意图迁移后不重放旧信号"}
         side = "buy" if signal["target"] == "long" else "sell"
         key = f"{self.scope}:{spec.symbol}:{spec.bar}:{signal['candle_ts']}:{side}"
         client_id = "wb" + hashlib.sha256(key.encode()).hexdigest()[:30]
@@ -138,7 +260,7 @@ class Engine:
             if not db.execute("SELECT active FROM strategies WHERE id=?", (strategy_id,)).fetchone()[0]:
                 raise TradingError("策略已暂停")
             unresolved = db.execute(
-                "SELECT 1 FROM orders WHERE scope=? AND state IN (?,?,?,?,?) LIMIT 1",
+                "SELECT 1 FROM orders WHERE scope=? AND state IN (?,?,?,?,?,?) LIMIT 1",
                 (self.scope, *UNRESOLVED),
             ).fetchone()
             if unresolved:
@@ -192,12 +314,8 @@ class Engine:
             if limit <= 0 or ct <= 0:
                 raise TradingError("合约价格或面值无效")
             if side == "buy":
-                cap = min(self.settings.max_position, equity * self.settings.equity_fraction)
-                budget = min(
-                    self.settings.max_order,
-                    equity * number(spec.allocation),
-                    cap - total_notional,
-                    available / Decimal("1.01"),
+                budget = opening_budget(
+                    self.settings, equity, available, number(spec.allocation), total_notional
                 )
                 quantity = quantize(budget / (ct * limit), number(info["lotSz"]))
                 if equity <= 0 or budget <= 0:
@@ -208,13 +326,26 @@ class Engine:
                 raise TradingError("风控预算不足最小合约张数")
             now = time.time()
             db.execute(
-                """INSERT INTO orders(id,scope,strategy_id,symbol,side,quantity,price,state,created,updated)
-                          VALUES(?,?,?,?,?,?,?,'reserved',?,?)""",
+                """INSERT INTO orders(id,scope,strategy_id,symbol,side,quantity,price,state,created,updated,intent_version)
+                          VALUES(?,?,?,?,?,?,?,'reserved',?,?,1)""",
                 (client_id, self.scope, strategy_id, spec.symbol, side, str(quantity), str(limit), now, now),
             )
-        # Durable intent is committed above, even if the process dies immediately after submission.
+        # The submit-start marker must commit BEFORE POST. A rollback/crash after
+        # the request can never make a possibly submitted intent look unsent.
+        with self.store.locked() as db:
+            intent = db.execute("SELECT state FROM orders WHERE id=?", (client_id,)).fetchone()
+            if intent["state"] != "reserved":
+                return {"action": "duplicate", "id": client_id, "state": intent["state"], "signal": signal}
+            db.execute(
+                "UPDATE orders SET state='submitting',submit_started=?,updated=? WHERE id=?",
+                (time.time(), time.time(), client_id),
+            )
+            self.store.audit(db, client_id, "reserved", "submitting", "提交开始标记已持久化")
         failure, failure_code = None, None
         with self.store.locked() as db:
+            intent = db.execute("SELECT state FROM orders WHERE id=?", (client_id,)).fetchone()
+            if intent["state"] != "submitting":
+                return {"action": "duplicate", "id": client_id, "state": intent["state"], "signal": signal}
             active = db.execute("SELECT active FROM strategies WHERE id=?", (strategy_id,)).fetchone()[0]
             state, exchange_id, filled = "canceled_local", None, "0"
             if active:
@@ -261,6 +392,7 @@ class Engine:
                 "UPDATE orders SET state=?,exchange_id=?,filled=?,error=?,updated=? WHERE id=?",
                 (state, exchange_id, filled, failure, time.time(), client_id),
             )
+            self.store.audit(db, client_id, "submitting", state, failure or "提交结果已记录")
         self.store.event(f"{spec.symbol} {side} {quantity} 张：{state}", "error" if failure else "info")
         if failure:
             raise TradingError(failure, failure_code)

@@ -37,3 +37,24 @@ def test_smoke_cleanup_refuses_unattributed_position(setup_engine):
     with pytest.raises(demo_smoke.TradingError, match="不符"):
         demo_smoke.cleanup(engine, sid, "existing-entry", Decimal("0.16"), {"symbol": "BTC-USDT-SWAP"})
     assert not exchange.submissions
+
+
+def test_smoke_cleanup_persists_submit_marker_and_only_reduces_owned_position(setup_engine, monkeypatch):
+    engine, store, exchange, sid = setup_engine
+    exchange.position = "0.16"
+    original = exchange.place
+
+    def fill(body):
+        result = original(body)
+        exchange.position = "0"
+        return result
+
+    monkeypatch.setattr(exchange, "place", fill)
+    monkeypatch.setattr(demo_smoke.time, "sleep", lambda _: None)
+    summary = {"symbol": "BTC-USDT-SWAP"}
+    demo_smoke.cleanup(engine, sid, "owned-entry", Decimal("0.16"), summary)
+    assert summary["position_after_cleanup"] == "0" and summary["strategy_paused"]
+    assert exchange.submissions[0]["reduceOnly"] is True
+    order = store.orders(engine.scope)[0]
+    assert order["submit_started"] is not None and order["state"] == "filled"
+    assert store.audit_history(order["id"])[0]["to_state"] == "submitting"

@@ -963,3 +963,74 @@ section {
     width: calc(100% - 40px);
   }
 }
+
+#connection-notice {
+  margin-bottom: 16px;
+}
+.status-dot.inactive {
+  background: #aab4a5;
+}
+#connection-notice.warning,
+#blocker-notice {
+  background: #fbeee6;
+  border-color: #b86443;
+  color: #81452e;
+}
+#blocker-notice {
+  margin-top: 12px;
+  overflow-wrap: anywhere;
+}
+#backtest-snapshot {
+  color: #516148;
+}
+#backtest-stale {
+  margin-top: 12px;
+}
+textarea {
+  width: 100%;
+  min-height: 90px;
+  resize: vertical;
+  font: inherit;
+  border: 1px solid #dce2d7;
+  padding: 10px;
+}
+#recovery-dialog {
+  max-height: 90vh;
+  overflow-y: auto;
+}
+#recovery-dialog label {
+  margin-top: 12px;
+}
+.order-status {
+  white-space: normal;
+  min-width: 150px;
+}
+@media (max-width: 540px) {
+  #orders table,
+  #orders tbody {
+    display: block;
+    width: 100%;
+    white-space: normal;
+  }
+  #orders thead {
+    display: none;
+  }
+  #orders tr {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border-bottom: 1px solid #dce2d7;
+  }
+  #orders td {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  #orders td:nth-child(6) {
+    grid-column: 1/-1;
+    grid-row: 1;
+    background: #f3f5ef;
+  }
+  #orders td:nth-child(2),
+  #orders td:nth-child(7) {
+    grid-column: 1/-1;
+  }
+}

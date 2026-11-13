@@ -36,7 +36,28 @@ class Store:
                 CREATE TABLE IF NOT EXISTS backtests (
                     id INTEGER PRIMARY KEY, spec TEXT NOT NULL, result TEXT NOT NULL, created REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS order_audit (
+                    id INTEGER PRIMARY KEY, order_id TEXT NOT NULL, from_state TEXT NOT NULL,
+                    to_state TEXT NOT NULL, actor TEXT NOT NULL, reason TEXT NOT NULL,
+                    evidence TEXT NOT NULL, created REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS scope_migrations (
+                    old_scope TEXT PRIMARY KEY, scope TEXT NOT NULL, cutoff REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS control (id INTEGER PRIMARY KEY CHECK(id=1), epoch INTEGER NOT NULL);
+                INSERT OR IGNORE INTO control VALUES(1,0);
             """)
+            columns = {r[1] for r in db.execute("PRAGMA table_info(orders)")}
+            for name, declaration in {
+                "intent_version": "INTEGER NOT NULL DEFAULT 0",
+                "submit_started": "REAL",
+                "not_found_count": "INTEGER NOT NULL DEFAULT 0",
+                "last_error_code": "TEXT",
+            }.items():
+                if name not in columns:
+                    db.execute(f"ALTER TABLE orders ADD COLUMN {name} {declaration}")
+            if "last_signal" not in {r[1] for r in db.execute("PRAGMA table_info(strategies)")}:
+                db.execute("ALTER TABLE strategies ADD COLUMN last_signal TEXT")
         os.chmod(path, 0o600)
 
     @contextmanager
@@ -82,6 +103,22 @@ class Store:
     def stop(self):
         with self.locked() as db:
             db.execute("UPDATE strategies SET active=0")
+            db.execute("UPDATE control SET epoch=epoch+1 WHERE id=1")
+
+    def control_epoch(self):
+        with self.connect() as db:
+            return db.execute("SELECT epoch FROM control WHERE id=1").fetchone()[0]
+
+    def begin_start(self, expected=None):
+        from .market import TradingError
+
+        with self.locked() as db:
+            epoch = db.execute("SELECT epoch FROM control WHERE id=1").fetchone()[0]
+            if expected is not None and expected != epoch:
+                raise TradingError("启动请求已被暂停或另一操作作废，请刷新后重新确认")
+            db.execute("UPDATE control SET epoch=epoch+1 WHERE id=1")
+            db.execute("UPDATE strategies SET active=0")
+            return epoch + 1
 
     def orders(self, scope):
         with self.connect() as db:
@@ -95,6 +132,72 @@ class Store:
     def events(self):
         with self.connect() as db:
             return [dict(r) for r in db.execute("SELECT * FROM events ORDER BY id DESC LIMIT 30")]
+
+    @staticmethod
+    def audit(db, order_id, before, after, reason, actor="system", evidence=None):
+        db.execute(
+            "INSERT INTO order_audit(order_id,from_state,to_state,actor,reason,evidence,created) VALUES(?,?,?,?,?,?,?)",
+            (
+                order_id,
+                before,
+                after,
+                actor,
+                reason,
+                json.dumps(evidence or {}, ensure_ascii=False),
+                time.time(),
+            ),
+        )
+
+    def audit_history(self, order_id):
+        with self.connect() as db:
+            return [
+                dict(r)
+                for r in db.execute("SELECT * FROM order_audit WHERE order_id=? ORDER BY id", (order_id,))
+            ]
+
+    def unresolved(self, scope):
+        with self.connect() as db:
+            return [
+                dict(r)
+                for r in db.execute(
+                    "SELECT * FROM orders WHERE scope=? AND state IN ('reserved','submitting','unknown','accepted','live','partially_filled') ORDER BY created",
+                    (scope,),
+                )
+            ]
+
+    def migrate_scope(self, old_scope, scope):
+        from .market import TradingError
+
+        with self.locked() as db:
+            prefix = old_scope.rsplit(":", 1)[0] + ":"
+            foreign = db.execute(
+                "SELECT 1 FROM orders WHERE scope LIKE ? AND scope<>? AND scope NOT LIKE ? LIMIT 1",
+                (prefix + "%", old_scope, prefix + "uid:%"),
+            ).fetchone()
+            if foreign:
+                raise TradingError(
+                    "存在其他旧版 Key 的未核对意图；请先用原 Key 完成 UID 迁移，禁止绕过旧记录"
+                )
+            rows = db.execute("SELECT * FROM orders WHERE scope=?", (old_scope,)).fetchall()
+            if rows:
+                cutoff = max(r["created"] for r in rows)
+                db.execute("INSERT OR IGNORE INTO scope_migrations VALUES(?,?,?)", (old_scope, scope, cutoff))
+                for r in rows:
+                    self.audit(
+                        db, r["id"], r["state"], r["state"], "已认证账户 UID 绑定旧版意图；旧信号禁止重放"
+                    )
+                db.execute("UPDATE orders SET scope=? WHERE scope=?", (scope, old_scope))
+            for r in db.execute("SELECT id,report FROM strategies").fetchall():
+                report = json.loads(r["report"])
+                if report.get("scope") == old_scope:
+                    report["scope"] = scope
+                    db.execute("UPDATE strategies SET report=? WHERE id=?", (json.dumps(report), r["id"]))
+
+    def legacy_cutoff(self, scope):
+        with self.connect() as db:
+            return db.execute(
+                "SELECT COALESCE(MAX(cutoff),0) FROM scope_migrations WHERE scope=?", (scope,)
+            ).fetchone()[0]
 
     def save_backtest(self, spec, result):
         with self.connect() as db:

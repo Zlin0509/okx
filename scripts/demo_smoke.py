@@ -14,7 +14,7 @@ from pathlib import Path
 # Allows `uv run python scripts/demo_smoke.py` from a source checkout.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from okx_workbench.config import Settings  # noqa: E402
+from okx_workbench.config import BARS, Settings  # noqa: E402
 from okx_workbench.execution import TERMINAL, Engine, quantize  # noqa: E402
 from okx_workbench.market import OKX, TradingError, number  # noqa: E402
 from okx_workbench.store import Store  # noqa: E402
@@ -100,10 +100,15 @@ def cleanup(engine, sid, entry_id, maximum_filled, summary):
         now = time.time()
         with store.locked() as db:
             db.execute(
-                """INSERT INTO orders(id,scope,strategy_id,symbol,side,quantity,price,state,created,updated)
-                          VALUES(?,?,?,?,'sell',?,?,'reserved',?,?)""",
+                """INSERT INTO orders(id,scope,strategy_id,symbol,side,quantity,price,state,created,updated,intent_version)
+                          VALUES(?,?,?,?,'sell',?,?,'reserved',?,?,1)""",
                 (client_id, engine.scope, sid, symbol, str(quantity), str(price), now, now),
             )
+        with store.locked() as db:
+            db.execute(
+                "UPDATE orders SET state='submitting',submit_started=? WHERE id=?", (time.time(), client_id)
+            )
+            store.audit(db, client_id, "reserved", "submitting", "受限模拟清理提交开始")
         body = {
             "instId": symbol,
             "tdMode": "isolated",
@@ -174,12 +179,18 @@ def run(args):
             info = exchange.instrument(symbol)
             for bar in ("1H", "4H", "1D"):
                 candles = engine.candles(symbol, bar)
+                age = (engine.now_ms() - candles[-1].ts - BARS[bar]) / 1000
+                if not 0 <= age <= settings.max_signal_age_seconds:
+                    continue
                 for fast in (2, 4, 8, 12, 24, 36):
                     for slow in (3, 6, 18, 24, 36, 60, 100):
                         if fast >= slow:
                             continue
                         spec = StrategySpec(symbol=symbol, bar=bar, fast=fast, slow=slow, allocation=0.001)
                         signal = target(candles, spec)
+                        signal.update(
+                            {"age_seconds": age, "max_age_seconds": settings.max_signal_age_seconds}
+                        )
                         if signal["target"] == "long":
                             selected = spec, signal, candles, info
                             break
@@ -209,7 +220,7 @@ def run(args):
             "spec": spec.model_dump(),
             "source": "okx",
             "scope": engine.scope,
-            "validation": backtest(candles, spec),
+            "validation": backtest(candles, spec, limits=settings),
         }
         sid = store.add_strategy(report)
         engine.start(sid)
