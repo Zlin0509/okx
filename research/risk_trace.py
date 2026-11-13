@@ -1,9 +1,18 @@
 """Per-event observed breaches and durations; no exemption or changed risk budget."""
 
+from decimal import localcontext
+
 from .engine import ZERO, number
 
 
 def exposure_trace(ledger):
+    # Match the frozen ledger's precision even when called after Engine.run returns.
+    with localcontext() as context:
+        context.prec = 34
+        return _exposure_trace(ledger)
+
+
+def _exposure_trace(ledger):
     trace, episodes = [], []
     episode = None
     previous_positions = {}

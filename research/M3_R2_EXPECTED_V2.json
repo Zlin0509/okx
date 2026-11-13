@@ -1,0 +1,22 @@
+{
+  "ledger.csv": {
+    "bytes": 6395267,
+    "sha256": "a6da7d39ae8ec1d7698f2a31bb498169ef843cd8795b9b1cdc37ba22e98d7a18"
+  },
+  "risk_exposure.csv": {
+    "bytes": 2118013,
+    "sha256": "c1c9d8e0fa39a69dd15e1836af0ae274d6375bc1c274621f1c1e4fbaa090b90c"
+  },
+  "signals.json": {
+    "bytes": 94564,
+    "sha256": "46fac066edfdcaf8ec12fcbbabf85100a95278f9af11d8ee04e4b0b897ed6af4"
+  },
+  "summary.json": {
+    "bytes": 8712,
+    "sha256": "beda605ce2ca736dc2b730b439906c152208eb2313e0329443f9985ef0ae979d"
+  },
+  "synthetic.json": {
+    "bytes": 15456567,
+    "sha256": "07b6735e906e6414d3095416828b60863649af00970e71a9c654ca3b3ad752f1"
+  }
+}

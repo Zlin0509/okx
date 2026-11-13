@@ -20,8 +20,8 @@ from .synthetic_guard import install
 
 ROOT = Path(__file__).resolve().parent.parent
 PARAMS = ROOT / "research/M3_PROTOCOL_R2.json"
-RESULTS = ROOT / "research/results/m3_r2"
-FREEZE = ROOT / "research/M3_R2_SOURCE_FREEZE.json"
+RESULTS = ROOT / "research/results/m3_r2_v2"
+FREEZE = ROOT / "research/M3_R2_SOURCE_FREEZE_V2.json"
 CASES = (
     "convergence",
     "nonconvergence",
@@ -304,7 +304,7 @@ def perform(action):
     manifest = {
         name: {"bytes": len(body.encode()), "sha256": sha(body.encode())} for name, body in output.items()
     }
-    expected = json.loads((ROOT / "research/M3_R2_EXPECTED.json").read_text(encoding="utf-8"))
+    expected = json.loads((ROOT / "research/M3_R2_EXPECTED_V2.json").read_text(encoding="utf-8"))
     if manifest != expected:
         raise Rejected("artifact_mismatch", "Synthetic results disagree with frozen expected hashes")
     output["manifest.json"] = json.dumps(manifest, indent=2, sort_keys=True) + "\n"

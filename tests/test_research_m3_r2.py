@@ -4,7 +4,7 @@ import json
 import subprocess
 import sys
 from dataclasses import FrozenInstanceError, fields, replace
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from pathlib import Path
 
 import pytest
@@ -27,6 +27,9 @@ def test_public_callback_active_future_read_enumeration_and_write_fail():
         # Explicit future lookup fails, enumeration reveals no future/unavailable entries.
         with pytest.raises(KeyError):
             view.observations[market.frames[-1].ts + DAY]
+        if view.ts < market.frames[-1].ts:
+            with pytest.raises(KeyError):
+                view.observations[market.frames[-1].ts]  # Actual future row inside the supplied window.
         for name in ("engine", "market", "frames", "provider", "ledger", "source", "__dict__"):
             with pytest.raises(AttributeError):
                 getattr(view, name)
@@ -207,6 +210,29 @@ def test_breach_duration_tracks_a_delayed_risk_exit_without_relaxing_cap():
     assert any(
         row["hard_limit_breached"] and row["ts"] == 59 * DAY - 1 for row in run["risk_exposure"]["events"]
     )
+
+
+def test_risk_trace_cap_boundary_uses_frozen_ledger_precision():
+    equity = Decimal("1.234567890123456789012345678901234")
+    with localcontext() as context:
+        context.prec = 34
+        cap = equity * Decimal("0.25")
+    row = {
+        "seq": 0,
+        "ts": 0,
+        "event": "mark",
+        "equity": equity,
+        "gross_notional": cap,
+        "asset_absolute_notional": {"A": cap},
+        "net_notional": cap,
+        "positions": [],
+    }
+    with localcontext() as context:
+        context.prec = 9
+        result = exposure_trace([row])
+    assert result["events"][0]["asset_limit"] == cap
+    assert not result["events"][0]["hard_limit_breached"]
+    assert not result["episodes"]
 
 
 def test_ci_uses_synthetic_guard_and_m3_not_real_cache_audits():
