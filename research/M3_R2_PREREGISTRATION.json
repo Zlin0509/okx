@@ -1,0 +1,7 @@
+{
+  "scope": "synthetic/mock only; no M1 cache access",
+  "sha256": {
+    "research/M3_PROTOCOL_R2.json": "7bf247ccf7715d9cb81cfcff67c307aa2872409018b57e32a3a03b9efd61d241",
+    "research/M3_R2_PLAN.md": "960b05393a6eb498d3bcd3e83a5ab09fd27d85f83007f82ae3503eb4a2b0862d"
+  }
+}
