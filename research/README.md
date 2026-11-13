@@ -13,3 +13,5 @@ R2 计算规则见 `M2_PROTOCOL_R2.json`，测试规格见 `M2_R2_TEST_SPEC.md`�
 这不是策略收益或完整研究验收。缺受控快照运行 `python3 -m research.verify_m2` 或 `python3 -m research.m2 verify` 会退出 2，明确报 `controlled_snapshot_required`。不自动下载数据，不把缺数据视为通过。
 
 M2 CLI 在被 Git 忽略的 `research/runtime/` 追加 UTC／HEAD／argv／源与结果哈希日志；本地日志不是外部认证或全局不可重跑保证。仅代码 CI 只验证应用及合成算例，真实覆盖验收另行保留。
+
+M3 合成接口复现：`python3 -m research.m3 verify`（标准库，无需受控数据）。定义见 `M3_DESIGN.md`，范围／勘误及版本记录见 `M3_IMPLEMENTATION_NOTES.md`。V2 黄金哈希与受控版相同；真实入口 `python3 -m research.m3 real` 无条件拒绝。

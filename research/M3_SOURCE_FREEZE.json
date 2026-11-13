@@ -1,0 +1,20 @@
+{
+  "preregistration_commit": "622957e",
+  "scope": "synthetic only; golden hashes prove deterministic code behavior, no statistical or strategy evidence",
+  "sha256": {
+    "research/M3_DESIGN.md": "07c797c17e08f4d16ad9bcbb1190a0834f43c6e713af122f1f36ba244f3b5d48",
+    "research/M3_EXPECTED.json": "84fa465287c5f066e9fe33a5843be7bb2aedc9d4c32ac47b42d1f241049a8964",
+    "research/M3_IMPLEMENTATION_NOTES.md": "046fdbdd4526fb6a1caba73e74c30a65c5db7acdccdeaf80f61769f3aeaadf32",
+    "research/M3_PREREGISTRATION.json": "a6fdd89b95766deff7557ec325eae6abbc85e53cb7745779420a77685acfdf2d",
+    "research/M3_PROTOCOL.json": "5f79ea5cd883f918a1a33f3ef877b74b97d3e3941b013c185d0507fc3a5e113a",
+    "research/causal.py": "43fe60cce1259913701b113293653908640cca8842bfe865e51e8f526e9a4d90",
+    "research/engine.py": "918bde3f2dcd3fd2efed1c909765b6514b0d823a57be36511cc2cbd8ab8859e2",
+    "research/execution_audit.py": "38b38256b496d3516264fa5b52cce5924bbdc93e15d6d6666df6d6ca01dcc26d",
+    "research/m3.py": "f840d7a121bb1553e057179945221b3b7e1a4ec67cda82112b03b1f25ead83a4",
+    "research/m3_audit.py": "2377bc99d64a9ca07ef7d57b2ae5dfd01db7e43a1624fd5b06cca3fcba0398ef",
+    "research/portfolio.py": "593a258db641a6331c37babbabdbec1c1d994263c9a0566cd46e7a5043a0818a",
+    "research/spreads.py": "074bf482d774e5bb3c25b7029ab7ab455d9aa411cd00b5c0d7441abdbb960dfb",
+    "tests/test_research_m3.py": "3450e775a261112841b2f209ae7ec3766dc11b621876bce509eff825511ecd83"
+  },
+  "version": "M3-synthetic-1"
+}

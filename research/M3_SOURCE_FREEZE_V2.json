@@ -1,0 +1,23 @@
+{
+  "original_implementation_commit": "f42c012",
+  "preregistration_commit": "622957e",
+  "reason": "Cross-Python floating sum portability fix; no numeric parameter or strategy change",
+  "sha256": {
+    "research/M3_DESIGN.md": "07c797c17e08f4d16ad9bcbb1190a0834f43c6e713af122f1f36ba244f3b5d48",
+    "research/M3_EXPECTED.json": "84fa465287c5f066e9fe33a5843be7bb2aedc9d4c32ac47b42d1f241049a8964",
+    "research/M3_EXPECTED_V2.json": "84fa465287c5f066e9fe33a5843be7bb2aedc9d4c32ac47b42d1f241049a8964",
+    "research/M3_IMPLEMENTATION_NOTES.md": "c786207b9c0b65442067eab90f9708cb39dc1effdec4a535e88b857ccd164188",
+    "research/M3_PREREGISTRATION.json": "a6fdd89b95766deff7557ec325eae6abbc85e53cb7745779420a77685acfdf2d",
+    "research/M3_PROTOCOL.json": "5f79ea5cd883f918a1a33f3ef877b74b97d3e3941b013c185d0507fc3a5e113a",
+    "research/M3_SOURCE_FREEZE.json": "319daffbb18a92df7991b43d104facdfa2f6e5993df978c24e2d67597b0c0034",
+    "research/causal.py": "43fe60cce1259913701b113293653908640cca8842bfe865e51e8f526e9a4d90",
+    "research/engine.py": "918bde3f2dcd3fd2efed1c909765b6514b0d823a57be36511cc2cbd8ab8859e2",
+    "research/execution_audit.py": "38b38256b496d3516264fa5b52cce5924bbdc93e15d6d6666df6d6ca01dcc26d",
+    "research/m3.py": "802c468d6f154d2320e3fbaa66fbaf62d6c72192816ce4e3dc16d0b61d3d76f6",
+    "research/m3_audit.py": "0e445bedf916b34d4c27c2eb9c7a7b59ba0600ded81de062d4d28a423916a979",
+    "research/portfolio.py": "0571ad4f6498a7d6c4311846fc8c017df81050c5456dd1278e6abff91de4ecc6",
+    "research/spreads.py": "ce01b282f52617993c43d41eb3d068a6766113d464607bb5830a84dca7ec4fc7",
+    "tests/test_research_m3.py": "3450e775a261112841b2f209ae7ec3766dc11b621876bce509eff825511ecd83"
+  },
+  "version": "M3-synthetic-2-fsum"
+}

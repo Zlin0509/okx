@@ -1,0 +1,18 @@
+{
+  "ledger.csv": {
+    "bytes": 6395267,
+    "sha256": "a6da7d39ae8ec1d7698f2a31bb498169ef843cd8795b9b1cdc37ba22e98d7a18"
+  },
+  "signals.json": {
+    "bytes": 94564,
+    "sha256": "46fac066edfdcaf8ec12fcbbabf85100a95278f9af11d8ee04e4b0b897ed6af4"
+  },
+  "summary.json": {
+    "bytes": 7669,
+    "sha256": "aa0a2fae4a3c3d698af41ceae4e98d81ab33d38cc5e739b26960bc31a43b636e"
+  },
+  "synthetic.json": {
+    "bytes": 9898781,
+    "sha256": "544ab37e3ba5b9a09e2ae7f2e4c03ccd6432e2ff37941e8afcd06f3b56564e5b"
+  }
+}
