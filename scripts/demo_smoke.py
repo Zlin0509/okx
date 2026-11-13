@@ -1,6 +1,7 @@
 """Explicitly authorized one-shot demo smoke. Never starts a background runner."""
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -138,6 +139,19 @@ def cleanup(engine, sid, entry_id, maximum_filled, summary):
 
 
 def run(args):
+    database = Path(args.database).expanduser().resolve()
+    args.database = str(database)
+    database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Share the application's process lock as well as its UID-bound ledger.
+    with Path(str(database) + ".lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return {"status": "blocked", "error": "主应用或另一个联调正在使用该数据库；请先停止服务"}
+        return _run(args)
+
+
+def _run(args):
     settings = Settings(
         mode="demo",
         source="okx",
@@ -159,6 +173,7 @@ def run(args):
     sid, entry_id, proven_fill = None, None, Decimal(0)
     try:
         engine = Engine(settings, store, exchange)
+        _ = engine.scope  # Bind/verify the shared application ledger before any smoke operation.
         store.stop()
         account = exchange.account()
         summary.update(
@@ -279,7 +294,11 @@ def main():
     parser.add_argument(
         "--execute-demo", action="store_true", help="Actually submit up to 25 USDT to demo only"
     )
-    parser.add_argument("--database", default="data/demo-smoke.sqlite3")
+    parser.add_argument(
+        "--database",
+        default=os.getenv("DATABASE_PATH", Settings().database),
+        help="Use the main application ledger; set explicitly if its .env overrides DATABASE_PATH",
+    )
     parser.add_argument("--report", default=None)
     args = parser.parse_args()
     try:

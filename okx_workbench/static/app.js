@@ -12,7 +12,6 @@ let state,
   refreshGeneration = 0,
   lastSnapshot = null,
   lastInputFingerprint = null,
-  recoveryOrderId = null,
   slipInitialized = false,
   confirmedPause = false;
 
@@ -322,26 +321,10 @@ function renderOrders() {
         }
       });
       action.append(button);
-    } else if (
-      order.state === "unknown" &&
-      order.not_found_count >= 3 &&
-      order.last_error_code === "51603"
-    ) {
-      const button = document.createElement("button");
-      button.className = "button subtle";
-      button.textContent = "人工审计解除";
-      button.addEventListener("click", () => {
-        recoveryOrderId = order.id;
-        $("recovery-description").textContent =
-          `${order.symbol} / ${order.id}，连续查无订单 ${order.not_found_count} 次。最新查单和账户状态仍需服务端再次核对。`;
-        $("recovery-form").reset();
-        $("recovery-dialog").showModal();
-      });
-      action.append(button);
     } else
       action.textContent =
         order.state === "unknown"
-          ? `查无订单 ${order.not_found_count || 0}/3；先对账核对`
+          ? "禁止人工作废或重发；持续对账至确认终态"
           : "—";
   }
   $("events").replaceChildren();
@@ -403,12 +386,12 @@ async function refresh() {
   state.blockers = blockers;
   const messages = blockers.map(
     (o) =>
-      `${o.symbol}：${statusText[o.state] || o.state}。${o.error || "请先订单对账"}；订单 ${o.id}，明确查无 ${o.not_found_count || 0}/3 次。`,
+      `${o.symbol}：${statusText[o.state] || o.state}。${o.error || "请先订单对账"}；订单 ${o.id}，查无记录 ${o.not_found_count || 0} 次（不能证明不会成交）。`,
   );
   if (state.startup_error) messages.unshift(state.startup_error);
   $("blocker-notice").classList.toggle("hidden", !messages.length);
   $("blocker-notice").textContent = messages.length
-    ? `执行已阻断：${messages.join(" ")} 先在 OKX 核对订单与成交。连续三次明确查无订单且无挂单/目标持仓后，可填写依据人工解除；原信号永久禁止重发。`
+    ? `执行已阻断：${messages.join(" ")} 未知或已提交订单禁止人工作废，须持续对账至交易所确认终态；查无次数、等待时间和空账户快照均不能排除迟到成交，原信号永久禁止重发。`
     : "";
   const active = state.strategies.find((s) => s.active);
   $("execution-state").textContent = active ? "运行中" : "已暂停";
@@ -603,22 +586,6 @@ inputIds.forEach((id) => {
   ["input", "change"].forEach((event) =>
     $(id).addEventListener(event, markSnapshotStale),
   );
-});
-$("cancel-recovery").addEventListener("click", () =>
-  $("recovery-dialog").close(),
-);
-$("recovery-form").addEventListener("submit", (event) => {
-  event.preventDefault();
-  busy("confirm-recovery", async () => {
-    await api(`/orders/${recoveryOrderId}/abandon`, {
-      operator: $("recovery-operator").value,
-      reason: $("recovery-reason").value,
-      confirmation: $("recovery-confirm").value,
-    });
-    $("recovery-dialog").close();
-    await refresh();
-    notify("已人工解除并保留审计，原信号未重发，策略仍暂停。");
-  });
 });
 document.querySelectorAll("nav a").forEach((link) =>
   link.addEventListener("click", () => {

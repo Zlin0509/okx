@@ -1,5 +1,6 @@
 """Single-host demo-account binding, NOT a distributed lock. Settings rejects live."""
 
+import fcntl
 import hashlib
 import sqlite3
 from pathlib import Path
@@ -13,10 +14,19 @@ def account_scope(mode, uid):
     return f"{mode}:okx:uid:" + hashlib.sha256(uid.encode()).hexdigest()
 
 
-def bind_account(directory, scope, database):
+def bind_account(directory, scope, database, migrate=lambda: None):
     root = Path(directory).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = root / "accounts.sqlite3"
+    # Serialize the durable claim and migration, including rollback after a handled
+    # migration failure. A process crash leaves the claim in place (fail closed).
+    with (root / "bindings.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _bind_and_migrate(path, scope, database, migrate)
+    path.chmod(0o600)
+
+
+def _bind_and_migrate(path, scope, database, migrate):
     with sqlite3.connect(path, timeout=30) as db:
         db.execute("CREATE TABLE IF NOT EXISTS bindings(scope TEXT PRIMARY KEY, database TEXT NOT NULL)")
         db.execute("BEGIN IMMEDIATE")
@@ -30,4 +40,11 @@ def bind_account(directory, scope, database):
         if other:
             raise TradingError("账户已改变；该数据库已绑定另一账户，请使用独立数据库")
         db.execute("INSERT OR IGNORE INTO bindings VALUES(?,?)", (scope, canonical))
-    path.chmod(0o600)
+        db.commit()  # Claim survives a crash during migration.
+        try:
+            migrate()  # Store migration commits all changes or rolls them all back.
+        except Exception:
+            if row is None:
+                db.execute("DELETE FROM bindings WHERE scope=? AND database=?", (scope, canonical))
+                db.commit()
+            raise

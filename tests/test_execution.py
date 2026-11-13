@@ -56,8 +56,10 @@ def test_unknown_order_lookup_failure_remains_blocked(setup_engine):
         raise TradingError("无法确认订单")
 
     exchange.order = not_found
-    assert engine.execute(sid)["action"] == "duplicate"
+    with pytest.raises(TradingError, match="未启动"):
+        engine.execute(sid)
     assert store.orders(engine.scope)[0]["state"] == "unknown"
+    assert not store.strategies()[0]["active"]
     assert len(exchange.submissions) == 1
 
 

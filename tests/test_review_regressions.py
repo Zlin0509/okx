@@ -64,7 +64,7 @@ def test_crash_before_submit_marker_is_safe_to_cancel_without_replay(setup_engin
     assert store.audit_history(intent["id"])[-1]["to_state"] == "canceled_local"
 
 
-def test_crash_after_submit_marker_requires_audited_manual_recovery_and_never_replays(setup_engine):
+def test_crash_after_submit_marker_stays_blocked_until_late_fill(setup_engine):
     engine, store, exchange, sid = setup_engine
 
     class Crash(BaseException):
@@ -76,49 +76,47 @@ def test_crash_after_submit_marker_requires_audited_manual_recovery_and_never_re
     order = store.orders(engine.scope)[0]
     assert order["state"] == "submitting" and order["submit_started"] is not None
     exchange.order = missing
-    for _ in range(3):
-        engine.reconcile()
-    assert store.orders(engine.scope)[0]["not_found_count"] == 3
     before = len(exchange.submissions)
-    engine.abandon(
-        order["id"], "测试维护者", "已核对交易所历史订单及成交且账户空仓", "ABANDON_WITHOUT_RESEND"
-    )
-    assert store.orders(engine.scope)[0]["state"] == "abandoned"
+    for _ in range(10):
+        engine.tick()  # Running first tick pauses on the blocker; later ticks only GET.
+    assert store.orders(engine.scope)[0]["state"] == "unknown"
     assert not store.strategies()[0]["active"]
-    audit = store.audit_history(order["id"])[-1]
-    assert audit["actor"] == "测试维护者" and json.loads(audit["evidence"])["target_position"] == "0"
+    with pytest.raises(TradingError, match="禁止人工作废"):
+        engine.abandon(
+            order["id"], "测试维护者", "空仓且连续多次查无仍不能证明不会成交", "ABANDON_WITHOUT_RESEND"
+        )
+    with pytest.raises(TradingError, match="未结束或异常订单"):
+        engine.start(sid)
+    # Eventual exchange visibility and a fill after the attempted release.
+    exchange.position = "0.16"
+    exchange.order = lambda *args: {"state": "filled", "ordId": "12345", "accFillSz": "0.16"}
+    engine.tick()
+    assert store.orders(engine.scope)[0]["state"] == "filled"
+    assert store.orders(engine.scope)[0]["filled"] == exchange.position
+    assert not store.strategies()[0]["active"]
+    assert store.audit_history(order["id"])[-1]["to_state"] == "filled"
     rotated = Engine(replace(engine.settings, api_key="rotated-key"), store, exchange)
     rotated.start(sid)
     assert rotated.execute(sid)["action"] == "duplicate"
     assert len(exchange.submissions) == before
 
 
-@pytest.mark.parametrize(
-    "guard", ["fewer_checks", "network_error", "found", "position", "pending", "wrong_confirmation"]
-)
-def test_manual_recovery_guards(setup_engine, guard):
+@pytest.mark.parametrize("version,marked", [(0, False), (0, True), (1, True), (1, False)])
+@pytest.mark.parametrize("checks", [0, 3, 100])
+def test_unknown_cannot_be_released_by_count_time_or_account_snapshot(setup_engine, version, marked, checks):
     engine, store, exchange, sid = setup_engine
-    seed(engine, store, sid, "stuck")
-    exchange.order = missing
-    for _ in range(2 if guard == "fewer_checks" else 3):
-        engine.reconcile()
-    if guard == "network_error":
-        exchange.order = lambda *args: (_ for _ in ()).throw(TradingError("认证失败", "50113"))
-    if guard == "found":
-        exchange.order = lambda *args: {"state": "filled", "accFillSz": "0.01"}
-    if guard == "position":
-        exchange.position = "0.01"
-    if guard == "pending":
-        exchange.pending = [{"ordId": "other"}]
-    with pytest.raises(TradingError):
+    seed(engine, store, sid, "stuck", version=version)
+    with store.connect() as db:
+        db.execute(
+            "UPDATE orders SET not_found_count=?,last_error_code='51603',submit_started=? WHERE id='stuck'",
+            (checks, time.time() - 86400 if marked else None),
+        )
+    with pytest.raises(TradingError, match="禁止人工作废"):
         engine.abandon(
-            "stuck",
-            "维护者",
-            "已人工核对历史成交与挂单并记录依据",
-            "WRONG" if guard == "wrong_confirmation" else "ABANDON_WITHOUT_RESEND",
+            "stuck", "维护者", "已人工核对历史成交与挂单但不能证明不会迟到成交", "ABANDON_WITHOUT_RESEND"
         )
     assert store.orders(engine.scope)[0]["state"] == "unknown"
-    assert not exchange.submissions
+    assert not store.strategies()[0]["active"] and not exchange.submissions
 
 
 def test_per_order_lookup_failure_isolated_and_not_hidden_by_100_row_window(setup_engine):
@@ -238,7 +236,7 @@ def test_unverified_other_legacy_key_intents_cannot_be_hidden_by_rotation(setup_
     with store.connect() as db:
         db.execute("UPDATE orders SET scope='demo:okx:unverifiedoldkey' WHERE id='legacy-foreign'")
     rotated = Engine(replace(engine.settings, api_key="rotated-again"), store, exchange)
-    with pytest.raises(TradingError, match="其他旧版 Key"):
+    with pytest.raises(TradingError, match="无法核实账户归属"):
         rotated.start(sid)
     assert not exchange.submissions
 
@@ -257,10 +255,11 @@ def test_manual_recovery_api_audit_and_blocker_visibility(setup_engine):
             "reason": "已人工核对订单历史及成交，空仓无挂单",
             "confirmation": "ABANDON_WITHOUT_RESEND",
         }
-        assert client.post("/api/orders/old-unknown/abandon", json=body).json()["resubmitted"] is False
+        response = client.post("/api/orders/old-unknown/abandon", json=body)
+        assert response.status_code == 409 and "禁止人工作废" in response.json()["detail"]
         history = client.get("/api/orders/old-unknown/audit").json()["audit"]
-        assert history[-1]["actor"] == "本机测试员"
-        assert not client.get("/api/state").json()["blockers"]
+        assert history[-1]["to_state"] == "unknown"
+        assert client.get("/api/state").json()["blockers"]
         assert not client.get("/api/state").json()["strategies"][0]["active"]
     assert not exchange.submissions
 

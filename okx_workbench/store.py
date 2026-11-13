@@ -165,33 +165,69 @@ class Store:
                 )
             ]
 
-    def migrate_scope(self, old_scope, scope):
+    def migrate_scope(self, old_scope, scope, verify_order):
         from .market import TradingError
 
         with self.locked() as db:
             prefix = old_scope.rsplit(":", 1)[0] + ":"
-            foreign = db.execute(
-                "SELECT 1 FROM orders WHERE scope LIKE ? AND scope<>? AND scope NOT LIKE ? LIMIT 1",
-                (prefix + "%", old_scope, prefix + "uid:%"),
-            ).fetchone()
-            if foreign:
-                raise TradingError(
-                    "存在其他旧版 Key 的未核对意图；请先用原 Key 完成 UID 迁移，禁止绕过旧记录"
+            if (
+                db.execute(
+                    "SELECT 1 FROM orders WHERE scope LIKE ? AND scope<>? LIMIT 1",
+                    (prefix + "uid:%", scope),
+                ).fetchone()
+                or db.execute("SELECT 1 FROM scope_migrations WHERE scope<>? LIMIT 1", (scope,)).fetchone()
+            ):
+                raise TradingError("数据库已有另一账户 UID 记录，拒绝迁移")
+            legacy = {old_scope}
+            legacy.update(
+                r[0]
+                for r in db.execute(
+                    "SELECT DISTINCT scope FROM orders WHERE scope LIKE ? AND scope NOT LIKE ?",
+                    (prefix + "%", prefix + "uid:%"),
                 )
-            rows = db.execute("SELECT * FROM orders WHERE scope=?", (old_scope,)).fetchall()
-            if rows:
-                cutoff = max(r["created"] for r in rows)
-                db.execute("INSERT OR IGNORE INTO scope_migrations VALUES(?,?,?)", (old_scope, scope, cutoff))
+            )
+            # Verification and every update share one transaction. A revoked key
+            # needs no secret: look up each old client ID with the new authenticated
+            # account and compare immutable order identity. Missing is never proof.
+            for source in sorted(legacy):
+                rows = db.execute("SELECT * FROM orders WHERE scope=?", (source,)).fetchall()
+                evidence = {}
+                for r in rows:
+                    evidence[r["id"]] = (
+                        {"ownership": "authenticated_original_key", "account_scope": scope}
+                        if source == old_scope
+                        else verify_order(dict(r), scope)
+                    )
+                if rows:
+                    cutoff = max(r["created"] for r in rows)
+                    db.execute(
+                        "INSERT OR IGNORE INTO scope_migrations VALUES(?,?,?)", (source, scope, cutoff)
+                    )
                 for r in rows:
                     self.audit(
-                        db, r["id"], r["state"], r["state"], "已认证账户 UID 绑定旧版意图；旧信号禁止重放"
+                        db,
+                        r["id"],
+                        r["state"],
+                        r["state"],
+                        "已核实账户归属并迁移旧版意图；终态去重和旧信号截止保留",
+                        evidence=evidence[r["id"]],
                     )
-                db.execute("UPDATE orders SET scope=? WHERE scope=?", (scope, old_scope))
-            for r in db.execute("SELECT id,report FROM strategies").fetchall():
-                report = json.loads(r["report"])
-                if report.get("scope") == old_scope:
-                    report["scope"] = scope
-                    db.execute("UPDATE strategies SET report=? WHERE id=?", (json.dumps(report), r["id"]))
+                db.execute("UPDATE orders SET scope=? WHERE scope=?", (scope, source))
+                for r in db.execute("SELECT id,report FROM strategies").fetchall():
+                    report = json.loads(r["report"])
+                    if report.get("scope") == source and (rows or source == old_scope):
+                        report["scope"] = scope
+                        db.execute("UPDATE strategies SET report=? WHERE id=?", (json.dumps(report), r["id"]))
+            # Undo the unsafe release offered by the previous build. Its audit is
+            # retained, but a possibly submitted order must rejoin reconciliation.
+            for r in db.execute(
+                "SELECT * FROM orders WHERE scope=? AND state='abandoned'", (scope,)
+            ).fetchall():
+                db.execute(
+                    "UPDATE orders SET state='unknown',error=?,updated=? WHERE id=?",
+                    ("撤销旧版人工解除；持续对账至交易所确认终态", time.time(), r["id"]),
+                )
+                self.audit(db, r["id"], "abandoned", "unknown", "旧版解除不能证明订单不会成交，恢复阻断")
 
     def legacy_cutoff(self, scope):
         with self.connect() as db:

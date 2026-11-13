@@ -313,43 +313,5 @@
         </div>
       </form>
     </dialog>
-    <dialog id="recovery-dialog">
-      <form id="recovery-form">
-        <h2>人工解除异常订单</h2>
-        <p id="recovery-description"></p>
-        <p>
-          先在 OKX
-          核对历史订单和成交。解除仅取消本地阻断，原信号仍禁止重发，策略继续暂停。
-        </p>
-        <label
-          >操作人（本机审计标签）<input
-            id="recovery-operator"
-            required
-            minlength="2"
-            maxlength="80"
-        /></label>
-        <label
-          >核对依据与原因<textarea
-            id="recovery-reason"
-            required
-            minlength="12"
-            maxlength="500"
-          ></textarea>
-        </label>
-        <label
-          >输入 ABANDON_WITHOUT_RESEND 确认<input
-            id="recovery-confirm"
-            required
-            autocomplete="off"
-        /></label>
-        <div class="dialog-actions">
-          <button class="button subtle" id="cancel-recovery" type="button">
-            返回核对</button
-          ><button class="button dark" id="confirm-recovery" type="submit">
-            解除并保留审计
-          </button>
-        </div>
-      </form>
-    </dialog>
   </body>
 </html>

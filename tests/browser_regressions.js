@@ -99,6 +99,12 @@ async (page, screenshotDir = null) => {
     await page.waitForFunction(()=>document.querySelector('#blocker-notice').textContent.includes('unknown123456789'));
     ensure(await page.locator('#start').isDisabled(),'blocked account can start strategy');
     ensure((await page.locator('#blocker-notice').innerText()).includes('禁止重发'),'recovery instruction absent');
+    blocker.not_found_count=100;
+    await page.locator('#refresh').click();
+    await page.waitForFunction(()=>document.querySelector('#blocker-notice').textContent.includes('100 次'));
+    ensure((await page.locator('#blocker-notice').innerText()).includes('禁止人工作废'),'unknown abandonment prohibition absent');
+    ensure(await page.getByRole('button',{name:'人工审计解除'}).count()===0,'not-found count exposed unsafe release');
+    ensure(await page.locator('#recovery-dialog').count()===0,'unsafe recovery form retained');
     await page.locator('#orders').scrollIntoViewIfNeeded();
     const box=await page.locator('.order-status').boundingBox();
     ensure(box.x>=0 && box.x+box.width<=width,'status requires horizontal scroll');

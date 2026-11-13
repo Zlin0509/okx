@@ -47,7 +47,9 @@ OKX_PASSPHRASE=你的Passphrase
 
 这是**单主机、单 OS 用户、同一持久化目录**的模拟盘约束，不是分布式锁。不同主机、OS 用户、容器独立目录或 NFS 场景不能保证互斥；这些部署不支持实盘。独立机器人和人工交易不在本机协调范围，模拟盘仍须使用独立子账户。切换不同 UID 需要独立数据库。
 
-旧版当前 Key 的意图迁移到已认证 UID，原订单 ID 不变并保留迁移审计；迁移前最后一次下单时间之前的信号禁止重放。存在其他旧版 Key 的未核对记录时拒绝执行，需先用原 Key 完成 UID 迁移，不能通过换 Key 隐藏旧意图。
+旧版当前 Key 的意图用已认证 Key 指纹确认归属后迁移到 UID。旧 Key 已撤销时，用新 Key 的认证账户逐条查询旧客户端订单号，并核对合约、方向、数量、交易所订单号与本地终态；匹配后终态和未终态均可迁移，保留原 ID、去重、历史审计和迁移证据。迁移前最后一次下单时间之前的信号禁止重放。查无、记录超出交易所保留期、身份/终态不匹配均不能证明归属；未能核实的本地取消/拒绝记录也继续阻断，需恢复原 Key 或取得可核实订单，不能只凭本地 filled 标签放行。
+
+迁移和订单/策略更新在同一数据库事务内回滚；固定协调目录内文件锁串行保护绑定与迁移。普通迁移失败只撤销本次新建绑定，不删除已有绑定。进程崩溃会保留已持久化的账户绑定，以同一数据库重启恢复；不能删除绑定改用空库绕过旧意图。
 
 ## 策略和回测口径
 
@@ -73,12 +75,12 @@ SQLite 先提交 `reserved` 意图，再独立提交 `submitting` / `submit_star
 - 请求超时、断网或响应不完整 → `unknown`，暂停策略，**不自动重发**。
 - 服务启动先暂停并逐笔对账，单笔失败不遮住其他订单。“订单对账”同样先暂停，未结束和未知订单持续显示在总览阻断区。撤单检查每笔返回码。
 - 新版确定未提交的 `reserved`、离线未完成事务可安全转为 `canceled_local` 并保留去重；旧版意图或已有提交标记的订单必须按不确定结果查单。
-- 只有连续三次明确返回 51603 的 `unknown`，才显示“人工审计解除”。先在 OKX 核对历史订单/成交，填写操作人和至少 12 字依据，并输入 `ABANDON_WITHOUT_RESEND`。服务端再次查单并核对无挂单、目标合约无持仓，才转为 `abandoned`；审计保存原状态、操作人、依据和核对结果。网络/权限错误、已有订单或挂单/持仓均不可解除。
-- **解除不是重试**：原订单及去重键不删除，同一信号仍不能重发，策略保持暂停。查无订单不证明未成交；人工依据仍需真实核对，存在歧义继续停单。
+- **未知或已提交订单禁止人工作废**，不提供解除表单；旧客户端 `/abandon` 请求一律 409 并暂停。连续查无次数、冷却时间、空账户快照都不能证明不会迟到成交。保持阻断、持续只读查单，直到交易所确认 filled / canceled / mmp_canceled；新版本也会把旧版 abandoned 恢复为 unknown，保留原审计后重新对账。
+- 服务运行时即使策略暂停，也每 15 秒对已验证账户的未结束订单只读对账；发现迟到成交会更新成交量与审计，**不会自动恢复策略、重发或平仓**。归属验证失败需人工重试对账；服务停机期间不对账，重启继续查询。空 data 和 51603 均保持 unknown，错误码保留。永远无法确认终态的订单可能持续阻断。
 - 重启后全部策略暂停；同账户换 Key 保留 UID 去重，不同账户或数据源需重新生成策略。
 - “暂停全部策略”停止后续下单，可能等待当前已开始的请求结束；**不会自动平仓或撤销已有订单**。未知订单按上述流程处理，仓位应在 OKX 人工管理。
 - 暂停递增数据库控制版本，原子作废此前未完成的启动。HTTP 启动需携带 `/api/state` 的最新 `control_epoch`，过期请求返回 409；前端忽略已作废响应，不追加 tick。
-- 所有周期仅在收盘后 `MAX_SIGNAL_AGE_SECONDS` 内执行（默认/最大 300 秒）。过期或超前信号返回年龄和等待提示，不补单；持续运行的策略等待下一根有效信号，手动执行同样受限。
+- 所有周期仅在收盘后 `MAX_SIGNAL_AGE_SECONDS` 内执行（默认/最大 300 秒）。从原已确认 K 线固定 close_ts_ms 和 deadline_ms，在预检后、提交标记前和实际 POST 紧前再次校验，绝不重置有效期；过期或超前信号返回年龄和等待提示，不补单；持续运行的策略等待下一根有效信号，手动执行同样受限。
 - 断连后持续显示待同步及最后同步时间，金额清空，启动/手动执行禁用。暂停 POST 确认与后续刷新失败分别反馈。
 - `data/` 包含持仓账本、意图和审计记录，应持久化和备份。不要删除数据库或运行多个数据库实例连接同一账户；新数据库不能替代旧意图记录。`.env` 和 `data/` 均被 Git 忽略。
 
@@ -95,19 +97,21 @@ node --check okx_workbench/static/app.js
 
 测试采用 HTTP Mock 与临时数据库，无需密钥，不发送真实订单。GitHub Actions 使用 Python 3.11 / 3.14。详细验证记录见 `docs/VALIDATION.md`。
 
-主要接口：`GET /api/state`、`GET /api/market`、`GET /api/account`、`POST /api/strategies/generate`、`POST /api/backtests`、`GET /api/backtests/{id}/export.csv`、`POST /api/strategies/{id}/start`、`POST /api/strategies/{id}/tick`、`POST /api/orders/reconcile`、`POST /api/orders/{id}/cancel`、`POST /api/stop`。写请求均需 `Content-Type: application/json`；启动体示例 `{"confirmation":"START_OFFLINE","control_epoch":12}`，版本从最新 `/api/state` 读取；模拟盘确认用 `START_DEMO`。另有 `GET /api/strategies/{id}/signal`、`POST /api/orders/{id}/abandon`、`GET /api/orders/{id}/audit` 提供信号预览和带审计恢复。
+主要接口：`GET /api/state`、`GET /api/market`、`GET /api/account`、`POST /api/strategies/generate`、`POST /api/backtests`、`GET /api/backtests/{id}/export.csv`、`POST /api/strategies/{id}/start`、`POST /api/strategies/{id}/tick`、`POST /api/orders/reconcile`、`POST /api/orders/{id}/cancel`、`POST /api/stop`。写请求均需 `Content-Type: application/json`；启动体示例 `{"confirmation":"START_OFFLINE","control_epoch":12}`，版本从最新 `/api/state` 读取；模拟盘确认用 `START_DEMO`。另有 `GET /api/strategies/{id}/signal`、`GET /api/orders/{id}/audit` 提供信号预览和审计查询；旧的 `POST /api/orders/{id}/abandon` 仅保留为拒绝接口。
 
 实现依据：[OKX V5 官方接口文档](https://www.okx.com/docs-v5/en/)（签名、模拟盘、合约单位、订单状态与账户接口；2026-11-13 核对）。
 
 ## 一次性模拟联调脚本
 
-`scripts/demo_smoke.py` 只使用模拟盘，不读取 `.env`，凭据从当前用户独占权限的 JSON 文件在进程内读取（字段 `api_key`、`secret_key`、`passphrase`），不复制文件、不输出凭据。默认仅预检；只有明确授权后传 `--execute-demo` 才会交易：
+`scripts/demo_smoke.py` 只使用模拟盘，不读取 `.env`，凭据从当前用户独占权限的 JSON 文件在进程内读取（字段 `api_key`、`secret_key`、`passphrase`），不复制文件、不输出凭据。默认仅预检；只有明确授权后传 `--execute-demo` 才会交易。
+
+**先停止主应用**，脚本与主应用共享数据库进程锁与 UID 绑定。默认数据库已统一为 `data/workbench.sqlite3`，也接受进程环境变量 `DATABASE_PATH`；脚本不加载 `.env`，若主应用在 `.env` 配置其他路径，下述两个脚本命令均须显式传主应用账本的 `--database` 绝对路径。即使仅预检也会绑定账本，不可再用 `data/demo-smoke.sqlite3` 作为新默认。此前已绑定旧 smoke 库时，主应用应将 `DATABASE_PATH` 指向该原库继续恢复；不要删除协调记录或复制空库。脚本结束后同路径重启应用，保留全部意图和审计。
 
 ```bash
 # 仅预检，不下单。将路径替换为自己的受限权限文件。
-uv run python scripts/demo_smoke.py --credentials-file /secure/path/okx-demo.json
+uv run python scripts/demo_smoke.py --database data/workbench.sqlite3 --credentials-file /secure/path/okx-demo.json
 # 在用户明确授权后，一次性测试并清理。脚本不运行后台任务。
-uv run python scripts/demo_smoke.py --credentials-file /secure/path/okx-demo.json --execute-demo --report data/demo-result.json
+uv run python scripts/demo_smoke.py --database data/workbench.sqlite3 --credentials-file /secure/path/okx-demo.json --execute-demo --report data/demo-result.json
 ```
 
 脚本固定上限 25 USDT，仅在无永续持仓、无挂单、单向持仓、认证和行情预检通过时继续。按真实已完成 K 线选择一组满足快均线大于慢均线的简单规则，经生产 `Engine.execute` 链路触发开仓；查询订单终态与持仓变化，再以 `reduceOnly` 清理本次可归属新增仓位，最终暂停。没有有效期内的做多信号时停止，不补单或伪造行情。报告只有脱敏的信号、合约、数量、成交状态、费用和清理结果。凭据类型/权限不符时停止，不切换实盘。
