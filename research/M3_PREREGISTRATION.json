@@ -1,0 +1,7 @@
+{
+  "note": "Definitions, parameters and test specifications before implementation; no real data accessed",
+  "sha256": {
+    "research/M3_DESIGN.md": "07c797c17e08f4d16ad9bcbb1190a0834f43c6e713af122f1f36ba244f3b5d48",
+    "research/M3_PROTOCOL.json": "5f79ea5cd883f918a1a33f3ef877b74b97d3e3941b013c185d0507fc3a5e113a"
+  }
+}
