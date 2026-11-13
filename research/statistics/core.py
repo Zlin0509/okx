@@ -5,7 +5,7 @@ import json
 import math
 import re
 import warnings
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from importlib.metadata import version
 from pathlib import Path
 
@@ -337,14 +337,48 @@ def evaluate_family(view, plan, eligibility, origin=None):
 
 
 @dataclass(frozen=True, slots=True)
+class ModelProvenance:
+    """Travels with each screened model; never consumes generator truth."""
+
+    candidate_id: str
+    decision_ts: int
+    plan_sha256: str
+    family_sha256: str
+    training_sha256: str
+    origin: str = field(default="synthetic_test", init=False)
+    source: str = field(default="synthetic_statistical_screen_only", init=False)
+    screen_only: bool = field(default=True, init=False)
+    allowed_use: str = field(default="synthetic_calculation", init=False)
+    limitations: str = field(
+        default="Finite-sample screening can be wrong; no real qualification, trading, profit, capacity or deployment evidence",
+        init=False,
+    )
+
+    def require_use(self, origin, use):
+        if origin != self.origin or use != self.allowed_use:
+            raise Rejected("real_model_use_disabled", self.limitations)
+
+
+@dataclass(frozen=True)
+class ScreenedPriceModel(Model):
+    provenance: ModelProvenance = field(kw_only=True)
+
+    def zscore(self, prices, *, origin="synthetic_test", use="synthetic_calculation"):
+        self.provenance.require_use(origin, use)
+        return super().zscore(prices)
+
+
+@dataclass(frozen=True, slots=True)
 class ReturnModel:
     symbols: tuple[str, ...]
     intercept: float
     beta: tuple[float, ...]
     mean: float
     sd: float
+    provenance: ModelProvenance = field(kw_only=True)
 
-    def residual(self, current, previous):
+    def residual(self, current, previous, *, origin="synthetic_test", use="synthetic_calculation"):
+        self.provenance.require_use(origin, use)
         now, before = logs(current, self.symbols), logs(previous, self.symbols)
         dy = [a - b for a, b in zip(now, before, strict=True)]
         residual = (
@@ -381,7 +415,10 @@ def qualified_models(view, plan, batch, candidate_id, eligibility):
     if sample["training_sha256"] != analysis["training_sha256"]:
         raise Rejected("training_mismatch", "Permit is bound to the actual historical input digest")
     pm, rm = analysis["price_model"], analysis["return_model"]
-    price = Model(
+    provenance = ModelProvenance(
+        candidate_id, view.ts, batch["plan_sha256"], batch["family_sha256"], sample["training_sha256"]
+    )
+    price = ScreenedPriceModel(
         candidate.symbols,
         pm["intercept"],
         tuple(pm["beta"]),
@@ -392,6 +429,9 @@ def qualified_models(view, plan, batch, candidate_id, eligibility):
         view.ts,
         analysis["phi"],
         analysis["half_life_days"],
+        provenance=provenance,
     )
-    returns = ReturnModel(candidate.symbols, rm["intercept"], tuple(rm["beta"]), rm["mean"], rm["sd"])
+    returns = ReturnModel(
+        candidate.symbols, rm["intercept"], tuple(rm["beta"]), rm["mean"], rm["sd"], provenance=provenance
+    )
     return price, returns

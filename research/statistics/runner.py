@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import uuid
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,12 +16,13 @@ from ..engine import Rejected
 from ..execution_audit import append, canonical
 from ..synthetic_guard import GUARD_SCOPE, install
 from .core import dependencies, digest, evaluate_family, qualified_models
+from .disclosure import check_documents
 from .fixtures import asof, family, synthetic_series
 
 ROOT = Path(__file__).resolve().parents[2]
-FREEZE = ROOT / "research/M3B_SOURCE_FREEZE_V2.json"
-EXPECTED = ROOT / "research/M3B_EXPECTED.json"
-RESULTS = ROOT / "research/results/m3b"
+FREEZE = ROOT / "research/M3B_SOURCE_FREEZE_V3.json"
+EXPECTED = ROOT / "research/M3B_EXPECTED_R2.json"
+RESULTS = ROOT / "research/results/m3b_r2"
 
 
 def sha(body):
@@ -39,6 +41,8 @@ def reproduce():
         if batch["permits"][c.id]["status"] == "qualified":
             price, returns = qualified_models(view, plan, batch, c.id, eligibility[c.id])
             models[c.id] = {
+                "price_model": asdict(price),
+                "return_model": asdict(returns),
                 "price_z": price.zscore(view.observations[view.ts].prices),
                 **returns.residual(
                     view.observations[view.ts].prices, view.observations[view.ts - 86400000].prices
@@ -52,15 +56,22 @@ def reproduce():
         "break": False,
         "stationary_levels": False,
     }
-    observed = {name: row["status"] == "qualified" for name, row in batch["permits"].items()}
     return {
         "label": "SYNTHETIC STATISTICS ONLY — no strategy, real qualification or profit evidence",
         "batch": batch,
         "models": models,
-        "generator_truth_price_relation": truth,
+        **evaluation_notes(batch, truth),
+        "limit": "Finite-sample errors are retained, not repaired by changing seeds or thresholds",
+    }
+
+
+def evaluation_notes(batch, truth):
+    """Post-screen evaluation only; never feeds tests, permits or models."""
+    observed = {name: row["status"] == "qualified" for name, row in batch["permits"].items()}
+    return {
+        "generator_truth_price_relation": dict(truth),
         "false_positives": sorted(name for name in truth if observed[name] and not truth[name]),
         "false_negatives": sorted(name for name in truth if truth[name] and not observed[name]),
-        "limit": "Finite-sample errors are retained, not repaired by changing seeds or thresholds",
     }
 
 
@@ -95,6 +106,17 @@ def numerical_reference(value):
     return value
 
 
+def legacy_projection(result):
+    """Only new tagged model parameters are omitted; no old evidence is rewritten."""
+    return {
+        **result,
+        "models": {
+            name: {key: value for key, value in row.items() if key not in {"price_model", "return_model"}}
+            for name, row in result["models"].items()
+        },
+    }
+
+
 def verify_sources():
     for name in ("M3B_PREREGISTRATION.json", FREEZE.name):
         spec = json.loads((ROOT / "research" / name).read_text(encoding="utf-8"))
@@ -106,8 +128,13 @@ def verify_sources():
 def perform(action):
     verify_sources()
     result = reproduce()
+    legacy = json.loads((ROOT / "research/M3B_EXPECTED.json").read_text(encoding="utf-8"))
+    compare(numerical_reference(legacy_projection(result)), numerical_reference(legacy))
     expected = json.loads(EXPECTED.read_text(encoding="utf-8"))
     compare(numerical_reference(result), numerical_reference(expected))
+    # Documents are generated from the frozen machine result, not rounded/retyped numbers.
+    # Actual platform statistics are compared above using the original registered tolerance.
+    check_documents(ROOT, expected)
     content = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n"
     if action == "write":
         if RESULTS.exists():
