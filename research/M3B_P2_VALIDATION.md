@@ -7,7 +7,7 @@
 | rw_residual 数值披露错误 | disclosure.documents 从冻结机器 JSON 生成 M3B_REPORT_R2.md 和 M3B_INTEGRATION_R2.md；CLI 同时检查文档一致。原始 0.009662979064298902、Holm 0.028988937192896705、BY 0.03551144806129846；旧报告和评论的乘四错误明确勘误，不改写历史 |
 | 脱离 batch 的模型失去 screen-only 标签 | qualified_models 的价格／收益模型各带不可变 ModelProvenance，含 synthetic origin、screen-only 来源、用途限制、候选、时间及计划／完整族／训练摘要；asdict→JSON、pickle 独立序列化保留标签。显式真实 origin／交易／收益／部署用途请求拒绝。标签不使用生成器真值，也不以清除假阳性为目的 |
 | 原结果与资格绑定 | legacy_projection 仅删新增模型参数，其余全部与旧黄金核对；本机 JSON 正规化后的完整 batch 与旧版逐值完全一致。旧快照／检验族篡改拒绝、未来扰动不改变历史的测试继续通过 |
-| 冻结与旧证据 | V3 新冻结含 49 项（含 V2 原文件与新增规格／文档／黄金／测试）。旧规格、生成器、报告、黄金及所有旧冻结未改；新结果仅写 research/results/m3b_r2。旧快照、应用、原并发测试、研究账本源 Git tree 比较未变，未打开快照内容 |
+| 冻结与旧证据 | V3 新冻结含 50 项（含 V2 原文件与新增规格／文档／黄金／测试）。旧规格、生成器、报告、黄金及所有旧冻结未改；新结果仅写 research/results/m3b_r2。旧快照、应用、原并发测试、研究账本源 Git tree 比较未变，未打开快照内容 |
 
 ## 实际测试覆盖
 
