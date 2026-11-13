@@ -15,10 +15,12 @@ jobs:
           python-version: ${{ matrix.python }}
           enable-cache: true
       - run: uv sync --frozen --group dev
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-      - run: uv run python -m research.synthetic_guard pytest -q
-      - run: uv run python -m research.m3 verify
+      - run: uv pip install --python .venv/bin/python --require-hashes -r research/statistics/requirements.lock
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync python -m research.synthetic_guard pytest -q
+      - run: uv run --no-sync python -m research.m3 verify
+      - run: uv run --no-sync python -m research.statistics verify
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

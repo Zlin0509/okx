@@ -18,7 +18,7 @@ from .core import dependencies, digest, evaluate_family, qualified_models
 from .fixtures import asof, family, synthetic_series
 
 ROOT = Path(__file__).resolve().parents[2]
-FREEZE = ROOT / "research/M3B_SOURCE_FREEZE.json"
+FREEZE = ROOT / "research/M3B_SOURCE_FREEZE_V2.json"
 EXPECTED = ROOT / "research/M3B_EXPECTED.json"
 RESULTS = ROOT / "research/results/m3b"
 
@@ -96,7 +96,7 @@ def numerical_reference(value):
 
 
 def verify_sources():
-    for name in ("M3B_PREREGISTRATION.json", "M3B_SOURCE_FREEZE.json"):
+    for name in ("M3B_PREREGISTRATION.json", FREEZE.name):
         spec = json.loads((ROOT / "research" / name).read_text(encoding="utf-8"))
         for path, expected in spec["sha256"].items():
             if sha((ROOT / path).read_bytes()) != expected:
