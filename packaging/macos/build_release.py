@@ -9,6 +9,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import zipfile
 from pathlib import Path
@@ -69,6 +70,10 @@ def source_zip(output, commit):
 
 def copy_licenses(directory):
     directory.mkdir(parents=True)
+    python_license = Path(sysconfig.get_path("stdlib")) / "LICENSE.txt"
+    if not python_license.is_file():
+        raise RuntimeError("CPython license is required for redistributing the embedded runtime")
+    shutil.copyfile(python_license, directory / "CPython-LICENSE.txt")
     lines = []
     for dist in importlib.metadata.distributions():
         name = dist.metadata["Name"]
