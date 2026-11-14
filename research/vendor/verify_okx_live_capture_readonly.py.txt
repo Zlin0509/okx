@@ -1,0 +1,830 @@
+#!/usr/bin/env python3
+"""Pure read-only verifier for the ZLIN-11 OKX 120-second public WS capture package.
+
+Reads every input with ``read_bytes``/``read_text`` only. It never writes into the
+package, never opens a socket, and re-hashes all input files before and after the
+checks. Covers the P2 gaps of the shipped verifier:
+
+* SHA256SUMS member bytes/hashes (missing or changed member fails);
+* exactly 24 streams (8 USDT swaps x tickers/mark-price/funding-rate);
+* per-stream and global exchange/receive first/last, max receive gap, regressions;
+* funding snapshots: state, settlement times, no settlement inside the window;
+* connection lifecycle: connect -> handshake 101 -> subscribe -> messages -> local close;
+* independent recomputation compared with summary/coverage/verification/funding files.
+
+Usage:
+    python3 -I verify_okx_live_capture_readonly.py PACKAGE_ROOT [--json]
+
+PACKAGE_ROOT is the extracted directory containing ``SHA256SUMS.json`` and
+``capture/``. Passing ``.../capture`` is also accepted. Exit 0 = pass, 2 = failure,
+3 = usage/read error. The output is machine-readable JSON on stdout.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import json
+import sys
+from collections import Counter
+from datetime import UTC, datetime
+from pathlib import Path
+
+EXPECTED_SOURCE = "wss://ws.okx.com/ws/v5/public"
+SYMBOLS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "LINK", "AVAX")
+CHANNELS = ("tickers", "mark-price", "funding-rate")
+REQUIRED_MEMBERS = (
+    "capture/raw.jsonl",
+    "capture/summary.json",
+    "capture/coverage.csv",
+    "capture/verification.json",
+    "capture/funding_snapshots.json",
+    "capture/provenance.json",
+)
+INTEGER_STREAM_FIELDS = ("messages", "rows", "ack_count", "timestamp_regressions")
+SUMMARY_RECEIVE_TOLERANCE_SECONDS = 0.001
+
+
+class VerificationError(Exception):
+    def __init__(self, code: str, detail: str):
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+
+
+def sha256_bytes(body: bytes) -> str:
+    return hashlib.sha256(body).hexdigest()
+
+
+def parse_iso(value: str) -> datetime:
+    return datetime.fromisoformat(value)
+
+
+def iso_delta_seconds(first: str, second: str) -> float:
+    return abs((parse_iso(first) - parse_iso(second)).total_seconds())
+
+
+def ms_to_iso(value: int) -> str:
+    return datetime.fromtimestamp(value / 1000, tz=UTC).isoformat()
+
+
+def resolve_root(value: str) -> Path:
+    path = Path(value).resolve()
+    if (path / "SHA256SUMS.json").is_file() or (path / "capture").is_dir():
+        return path
+    if path.name == "capture" and (path.parent / "capture").is_dir():
+        return path.parent
+    raise VerificationError(
+        "package_root_invalid",
+        f"{path} does not contain SHA256SUMS.json/capture (or is not a capture/ child)",
+    )
+
+
+def hash_inputs(root: Path) -> dict[str, dict[str, object]]:
+    hashes = {}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or "__pycache__" in path.parts or path.suffix == ".pyc":
+            continue
+        body = path.read_bytes()
+        hashes[path.relative_to(root).as_posix()] = {
+            "bytes": len(body),
+            "sha256": sha256_bytes(body),
+        }
+    return hashes
+
+
+def verify_members(root: Path) -> tuple[dict, set[str]]:
+    manifest_path = root / "SHA256SUMS.json"
+    if not manifest_path.is_file():
+        raise VerificationError("manifest_missing", "SHA256SUMS.json is missing")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise VerificationError("manifest_invalid", f"SHA256SUMS.json: {exc}") from None
+    if not isinstance(manifest, dict) or not manifest:
+        raise VerificationError(
+            "manifest_invalid", "SHA256SUMS.json must be a non-empty object"
+        )
+
+    verified: dict[str, dict[str, object]] = {}
+    for relative, meta in sorted(manifest.items()):
+        if not isinstance(meta, dict) or "sha256" not in meta or "bytes" not in meta:
+            raise VerificationError("manifest_invalid", f"bad entry for {relative}")
+        path = root / relative
+        if not path.is_file():
+            raise VerificationError("member_missing", relative)
+        body = path.read_bytes()
+        expected_bytes = int(meta["bytes"])
+        if len(body) != expected_bytes:
+            raise VerificationError(
+                "member_size_mismatch",
+                f"{relative}: expected {expected_bytes} bytes, found {len(body)}",
+            )
+        digest = sha256_bytes(body)
+        if digest != meta["sha256"]:
+            raise VerificationError(
+                "member_sha256_mismatch",
+                f"{relative}: expected {meta['sha256']}, found {digest}",
+            )
+        verified[relative] = {"bytes": len(body), "sha256": digest}
+
+    for required in REQUIRED_MEMBERS:
+        if required not in manifest:
+            raise VerificationError("required_member_not_listed", required)
+
+    unlisted = sorted(
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_file()
+        and path.relative_to(root).as_posix() not in manifest
+        and path.relative_to(root).as_posix() != "SHA256SUMS.json"
+        and "__pycache__" not in path.parts
+        and path.suffix != ".pyc"
+    )
+    return manifest, set(unlisted)
+
+
+def expected_streams(summary: dict) -> list[str]:
+    subscription = summary.get("subscription")
+    if not isinstance(subscription, dict) or subscription.get("op") != "subscribe":
+        raise VerificationError(
+            "summary_invalid", "subscription must be a subscribe request"
+        )
+    args = subscription.get("args")
+    if not isinstance(args, list) or len(args) != 24:
+        raise VerificationError(
+            "summary_invalid", "subscription.args must contain exactly 24 entries"
+        )
+    expected = []
+    seen = set()
+    for item in args:
+        if not isinstance(item, dict):
+            raise VerificationError(
+                "summary_invalid", "subscription args must be objects"
+            )
+        symbol = item.get("instId")
+        channel = item.get("channel")
+        if not isinstance(symbol, str) or not symbol.endswith("-USDT-SWAP"):
+            raise VerificationError("summary_invalid", f"unexpected instId: {symbol!r}")
+        if channel not in CHANNELS:
+            raise VerificationError(
+                "summary_invalid", f"unexpected channel: {channel!r}"
+            )
+        key = f"{symbol}/{channel}"
+        if key in seen:
+            raise VerificationError("summary_invalid", f"duplicate subscription: {key}")
+        seen.add(key)
+        expected.append(key)
+    wanted = {
+        f"{symbol}-USDT-SWAP/{channel}" for symbol in SYMBOLS for channel in CHANNELS
+    }
+    if set(expected) != wanted:
+        raise VerificationError(
+            "summary_invalid",
+            "subscription set is not the declared 8 swaps x 3 channels",
+        )
+    return expected
+
+
+def new_stream_stats() -> dict[str, object]:
+    return {
+        "messages": 0,
+        "rows": 0,
+        "ack_count": 0,
+        "first_exchange_ts": None,
+        "last_exchange_ts": None,
+        "first_receive_utc": None,
+        "last_receive_utc": None,
+        "max_receive_gap_seconds": None,
+        "timestamp_regressions": 0,
+    }
+
+
+def parse_raw(capture_dir: Path, summary: dict) -> dict:
+    raw_path = capture_dir / "raw.jsonl"
+    if not raw_path.is_file():
+        raise VerificationError("member_missing", "capture/raw.jsonl")
+
+    stats = {key: new_stream_stats() for key in expected_streams(summary)}
+    counts: Counter = Counter()
+    previous_receive_ns: dict[str, int] = {}
+    seen_receive_ns: set[int] = set()
+    duplicate_receive_ns = 0
+    funding_rows: list[dict] = []
+    lifecycle: list[tuple[int, dict]] = []
+    first_data_receive = None
+    last_data_receive = None
+    min_data_receive = None
+    max_data_receive = None
+    first_data_exchange_ts = None
+    last_data_exchange_ts = None
+    min_data_exchange_ts = None
+    max_data_exchange_ts = None
+    first_message_line = None
+    last_message_line = None
+
+    with raw_path.open(encoding="utf-8") as handle:
+        for lineno, line in enumerate(handle, 1):
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise VerificationError(
+                    "raw_json_invalid", f"line {lineno}: {exc}"
+                ) from None
+            if record.get("source") != EXPECTED_SOURCE:
+                raise VerificationError(
+                    "raw_source_mismatch",
+                    f"line {lineno}: source is {record.get('source')!r}",
+                )
+            kind = record.get("kind")
+            counts[kind] += 1
+
+            receive_ns = record.get("receive_unix_ns")
+            if isinstance(receive_ns, int):
+                if receive_ns in seen_receive_ns:
+                    duplicate_receive_ns += 1
+                seen_receive_ns.add(receive_ns)
+
+            if kind != "message":
+                lifecycle.append((lineno, record))
+                continue
+            first_message_line = first_message_line or lineno
+            last_message_line = lineno
+
+            try:
+                message = json.loads(record["raw_text"])
+            except (KeyError, json.JSONDecodeError) as exc:
+                raise VerificationError(
+                    "raw_message_invalid", f"line {lineno}: {exc}"
+                ) from None
+            arg = message.get("arg") or {}
+            key = f"{arg.get('instId')}/{arg.get('channel')}"
+            if key not in stats:
+                if message.get("event") == "error":
+                    raise VerificationError(
+                        "subscription_error",
+                        f"line {lineno}: {json.dumps(message, ensure_ascii=False)[:300]}",
+                    )
+                raise VerificationError("unexpected_stream", f"line {lineno}: {key}")
+            stat = stats[key]
+            if message.get("event") == "subscribe":
+                stat["ack_count"] += 1
+            rows = message.get("data") or []
+            if not rows:
+                continue
+            annotated = record.get("exchange_ts")
+            actual = [row.get("ts") for row in rows]
+            if annotated != actual:
+                raise VerificationError(
+                    "exchange_ts_annotation_mismatch",
+                    f"line {lineno}: {annotated!r} != {actual!r}",
+                )
+            stat["messages"] += 1
+            stat["rows"] += len(rows)
+            if stat["first_receive_utc"] is None:
+                stat["first_receive_utc"] = record["receive_utc"]
+            stat["last_receive_utc"] = record["receive_utc"]
+            first_data_receive = first_data_receive or record["receive_utc"]
+            last_data_receive = record["receive_utc"]
+            receive_utc = record["receive_utc"]
+            if min_data_receive is None or parse_iso(receive_utc) < parse_iso(
+                min_data_receive
+            ):
+                min_data_receive = receive_utc
+            if max_data_receive is None or parse_iso(receive_utc) > parse_iso(
+                max_data_receive
+            ):
+                max_data_receive = receive_utc
+            if key in previous_receive_ns:
+                gap = (receive_ns - previous_receive_ns[key]) / 1e9
+                stat["max_receive_gap_seconds"] = round(
+                    max(stat["max_receive_gap_seconds"] or 0.0, gap), 6
+                )
+            previous_receive_ns[key] = receive_ns
+            for row in rows:
+                ts = row.get("ts")
+                if ts:
+                    stat["first_exchange_ts"] = stat["first_exchange_ts"] or ts
+                    if stat["last_exchange_ts"] and int(ts) < int(
+                        stat["last_exchange_ts"]
+                    ):
+                        stat["timestamp_regressions"] += 1
+                    stat["last_exchange_ts"] = ts
+                    first_data_exchange_ts = first_data_exchange_ts or ts
+                    last_data_exchange_ts = ts
+                    numeric_ts = int(ts)
+                    if (
+                        min_data_exchange_ts is None
+                        or numeric_ts < min_data_exchange_ts
+                    ):
+                        min_data_exchange_ts = numeric_ts
+                    if (
+                        max_data_exchange_ts is None
+                        or numeric_ts > max_data_exchange_ts
+                    ):
+                        max_data_exchange_ts = numeric_ts
+                if arg.get("channel") == "funding-rate":
+                    funding_rows.append(
+                        {
+                            "receive_utc": record["receive_utc"],
+                            "instId": arg["instId"],
+                            **row,
+                        }
+                    )
+
+    return {
+        "stats": stats,
+        "counts": counts,
+        "funding_rows": funding_rows,
+        "lifecycle": lifecycle,
+        "duplicate_receive_ns": duplicate_receive_ns,
+        "first_data_receive": first_data_receive,
+        "last_data_receive": last_data_receive,
+        "first_data_exchange_ts": first_data_exchange_ts,
+        "last_data_exchange_ts": last_data_exchange_ts,
+        "min_data_receive": min_data_receive,
+        "max_data_receive": max_data_receive,
+        "min_data_exchange_ts": min_data_exchange_ts,
+        "max_data_exchange_ts": max_data_exchange_ts,
+        "first_message_line": first_message_line,
+        "last_message_line": last_message_line,
+    }
+
+
+def compare_with_coverage(capture_dir: Path, stats: dict) -> None:
+    path = capture_dir / "coverage.csv"
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+    expected_fields = [
+        "instId",
+        "channel",
+        "messages",
+        "rows",
+        "ack_count",
+        "first_exchange_ts",
+        "last_exchange_ts",
+        "first_receive_utc",
+        "last_receive_utc",
+        "max_receive_gap_seconds",
+        "timestamp_regressions",
+    ]
+    if reader.fieldnames != expected_fields:
+        raise VerificationError("coverage_schema_mismatch", repr(reader.fieldnames))
+    coverage = {f"{row['instId']}/{row['channel']}": row for row in rows}
+    if set(coverage) != set(stats):
+        raise VerificationError(
+            "coverage_stream_set_mismatch", "coverage streams differ from raw"
+        )
+    for key, stat in stats.items():
+        row = coverage[key]
+        for field in INTEGER_STREAM_FIELDS:
+            if str(stat[field]) != row[field]:
+                raise VerificationError(
+                    "coverage_mismatch",
+                    f"{key}: {field} {stat[field]!r} != {row[field]!r}",
+                )
+        for field in (
+            "first_exchange_ts",
+            "last_exchange_ts",
+            "first_receive_utc",
+            "last_receive_utc",
+        ):
+            if str(stat[field]) != row[field]:
+                raise VerificationError(
+                    "coverage_mismatch",
+                    f"{key}: {field} {stat[field]!r} != {row[field]!r}",
+                )
+        if (
+            abs(
+                float(stat["max_receive_gap_seconds"])
+                - float(row["max_receive_gap_seconds"])
+            )
+            > 5e-7
+        ):
+            raise VerificationError(
+                "coverage_mismatch",
+                f"{key}: max_receive_gap_seconds {stat['max_receive_gap_seconds']} != "
+                f"{row['max_receive_gap_seconds']}",
+            )
+
+
+def compare_with_summary(summary: dict, stats: dict) -> None:
+    if set(summary.get("channels", {})) != set(stats):
+        raise VerificationError(
+            "summary_stream_set_mismatch", "summary channels differ from raw"
+        )
+    for key, stat in stats.items():
+        recorded = summary["channels"][key]
+        for field in INTEGER_STREAM_FIELDS:
+            expected = (
+                1
+                if field == "ack_count" and recorded.get("ack") is True
+                else recorded.get(field)
+            )
+            if expected is None or int(stat[field]) != int(expected):
+                raise VerificationError(
+                    "summary_mismatch",
+                    f"{key}: {field} {stat[field]!r} != {expected!r}",
+                )
+        for field in ("first_exchange_ts", "last_exchange_ts"):
+            if str(stat[field]) != str(recorded.get(field)):
+                raise VerificationError(
+                    "summary_mismatch",
+                    f"{key}: {field} {stat[field]!r} != {recorded.get(field)!r}",
+                )
+        for field in ("first_receive_utc", "last_receive_utc"):
+            delta = iso_delta_seconds(stat[field], recorded[field])
+            if delta > SUMMARY_RECEIVE_TOLERANCE_SECONDS:
+                raise VerificationError(
+                    "summary_mismatch", f"{key}: {field} differs by {delta:.6f}s"
+                )
+        gap_delta = abs(
+            float(stat["max_receive_gap_seconds"])
+            - float(recorded["max_receive_gap_seconds"])
+        )
+        if gap_delta > SUMMARY_RECEIVE_TOLERANCE_SECONDS:
+            raise VerificationError(
+                "summary_mismatch", f"{key}: max_gap differs by {gap_delta:.6f}s"
+            )
+
+
+def compare_with_verification(capture_dir: Path, parsed: dict) -> None:
+    stats = parsed["stats"]
+    recorded = json.loads(
+        (capture_dir / "verification.json").read_text(encoding="utf-8")
+    )
+    expected = {
+        "record_counts": {kind: count for kind, count in parsed["counts"].items()},
+        "data_messages": sum(stat["messages"] for stat in stats.values()),
+        "acknowledged_subscriptions": sum(
+            bool(stat["ack_count"]) for stat in stats.values()
+        ),
+        "subscriptions_with_data": sum(stat["messages"] > 0 for stat in stats.values()),
+        "zero_message_subscriptions": [
+            key for key, stat in stats.items() if stat["messages"] == 0
+        ],
+        "timestamp_regressions": sum(
+            stat["timestamp_regressions"] for stat in stats.values()
+        ),
+        "funding_snapshot_rows": len(parsed["funding_rows"]),
+    }
+    for field, value in expected.items():
+        if recorded.get(field) != value:
+            raise VerificationError(
+                "verification_mismatch",
+                f"{field}: {value!r} != {recorded.get(field)!r}",
+            )
+    raw_digest = sha256_bytes((capture_dir / "raw.jsonl").read_bytes())
+    if recorded.get("raw_sha256") != raw_digest:
+        raise VerificationError("verification_mismatch", "verification.json raw_sha256")
+    if recorded.get("raw_summary_reconciliation") != "pass":
+        raise VerificationError(
+            "verification_mismatch", "raw_summary_reconciliation is not pass"
+        )
+
+
+def verify_funding(capture_dir: Path, parsed: dict, summary: dict) -> dict:
+    rows = parsed["funding_rows"]
+    expected_rows = 24
+    if len(rows) != expected_rows:
+        raise VerificationError(
+            "funding_count_mismatch", f"{len(rows)} != {expected_rows}"
+        )
+    per_symbol = Counter(row["instId"] for row in rows)
+    if set(per_symbol) != {f"{symbol}-USDT-SWAP" for symbol in SYMBOLS} or any(
+        count != 3 for count in per_symbol.values()
+    ):
+        raise VerificationError(
+            "funding_stream_mismatch",
+            f"expected 3 snapshots per swap, found {dict(per_symbol)}",
+        )
+    capture_start_ms = int(
+        parse_iso(summary["capture_started_at_utc"]).timestamp() * 1000
+    )
+    capture_end_ms = int(parse_iso(summary["finished_at_utc"]).timestamp() * 1000)
+    states = Counter()
+    settled_rates: dict[str, set[str]] = {}
+    for row in rows:
+        missing = [
+            field
+            for field in (
+                "fundingRate",
+                "fundingTime",
+                "prevFundingTime",
+                "nextFundingTime",
+                "settState",
+                "settFundingRate",
+                "ts",
+            )
+            if field not in row
+        ]
+        if missing:
+            raise VerificationError(
+                "funding_field_missing", f"{row['instId']}: {missing}"
+            )
+        states[row["settState"]] += 1
+        funding_time = int(row["fundingTime"])
+        previous_time = int(row["prevFundingTime"])
+        next_time = int(row["nextFundingTime"])
+        if funding_time <= previous_time:
+            raise VerificationError(
+                "funding_time_invalid", f"{row['instId']}: fundingTime <= prev"
+            )
+        if next_time <= funding_time:
+            raise VerificationError(
+                "funding_time_invalid", f"{row['instId']}: next <= fundingTime"
+            )
+        if previous_time < capture_start_ms < funding_time:
+            pass
+        else:
+            raise VerificationError(
+                "funding_settlement_in_window",
+                f"{row['instId']}: previous={previous_time}, window_start={capture_start_ms}, "
+                f"funding={funding_time}",
+            )
+        if funding_time <= capture_end_ms:
+            raise VerificationError(
+                "funding_settlement_in_window",
+                f"{row['instId']}: fundingTime {funding_time} <= window_end {capture_end_ms}",
+            )
+        settled_rates.setdefault(row["instId"], set()).add(row["settFundingRate"])
+
+    if states != {"settled": expected_rows}:
+        raise VerificationError("funding_status_invalid", f"states: {dict(states)}")
+    if any(len(rates) != 1 for rates in settled_rates.values()):
+        raise VerificationError(
+            "funding_status_invalid", "settFundingRate changed inside window"
+        )
+
+    recorded = json.loads(
+        (capture_dir / "funding_snapshots.json").read_text(encoding="utf-8")
+    )
+    if recorded != rows:
+        raise VerificationError(
+            "funding_snapshot_mismatch",
+            "funding_snapshots.json does not match raw funding rows",
+        )
+
+    provenance = json.loads(
+        (capture_dir / "provenance.json").read_text(encoding="utf-8")
+    )
+    if provenance.get("new_settlement_in_capture_window") is not False:
+        raise VerificationError(
+            "funding_status_invalid",
+            "provenance.new_settlement_in_capture_window must be false",
+        )
+    previous_times = sorted({int(row["prevFundingTime"]) for row in rows})
+    funding_times = sorted({int(row["fundingTime"]) for row in rows})
+    return {
+        "rows": len(rows),
+        "per_symbol": dict(sorted(per_symbol.items())),
+        "states": dict(states),
+        "new_settlement_in_capture_window": False,
+        "previous_funding_time_utc": [ms_to_iso(value) for value in previous_times],
+        "funding_time_utc": [ms_to_iso(value) for value in funding_times],
+    }
+
+
+def verify_lifecycle(parsed: dict, summary: dict) -> dict:
+    counts = parsed["counts"]
+    data_messages = sum(stat["messages"] for stat in parsed["stats"].values())
+    acks = sum(stat["ack_count"] for stat in parsed["stats"].values())
+    expected_counts = {
+        "connect_attempt": 1,
+        "handshake": 1,
+        "subscription_sent": 1,
+        "message": data_messages + acks,
+        "local_close": 1,
+    }
+    for kind, expected in expected_counts.items():
+        if counts.get(kind) != expected:
+            raise VerificationError(
+                "lifecycle_count_mismatch", f"{kind}: {counts.get(kind)} != {expected}"
+            )
+    extra = set(counts) - set(expected_counts)
+    if extra:
+        raise VerificationError(
+            "lifecycle_event_unexpected", f"unexpected event kinds: {sorted(extra)}"
+        )
+
+    events = parsed["lifecycle"]
+    kinds = [record["kind"] for _, record in events]
+    order = ["connect_attempt", "handshake", "subscription_sent", "local_close"]
+    if kinds != order:
+        raise VerificationError(
+            "lifecycle_order_invalid", f"non-message order: {kinds}"
+        )
+    connect = events[0][1]
+    handshake = events[1][1]
+    close = events[3][1]
+    if connect.get("attempt") != 1 or connect.get("port") != 443:
+        raise VerificationError("lifecycle_connect_invalid", "attempt/port")
+    if handshake.get("http_status") != 101 or "101" not in str(
+        handshake.get("status_line", "")
+    ):
+        raise VerificationError(
+            "lifecycle_handshake_invalid", str(handshake.get("status_line"))
+        )
+    if close.get("close_frame_sent") is not True:
+        raise VerificationError(
+            "lifecycle_close_invalid", "close_frame_sent is not true"
+        )
+
+    if summary.get("reconnects") != 0:
+        raise VerificationError("lifecycle_reconnect", "summary.reconnects != 0")
+    if summary.get("errors") != [] or summary.get("disconnects") != []:
+        raise VerificationError(
+            "lifecycle_error", "summary errors/disconnects are not empty"
+        )
+    if summary.get("outcome") != "completed_bounded_window":
+        raise VerificationError("lifecycle_outcome", str(summary.get("outcome")))
+    if summary.get("credentials_used") is not False:
+        raise VerificationError(
+            "lifecycle_credentials", "credentials_used must be false"
+        )
+    if summary.get("background_processes_started") != 0:
+        raise VerificationError(
+            "lifecycle_background", "background_processes_started != 0"
+        )
+    if (
+        summary.get("close_frame_sent") is not True
+        or summary.get("connection_closed") is not True
+    ):
+        raise VerificationError("lifecycle_close", "summary close flags are not true")
+    elapsed = float(summary.get("capture_elapsed_seconds", -1))
+    if not 119.0 <= elapsed <= 121.0:
+        raise VerificationError(
+            "lifecycle_duration", f"capture_elapsed_seconds={elapsed}"
+        )
+    if int(summary.get("requested_seconds", -1)) != 120:
+        raise VerificationError("lifecycle_duration", "requested_seconds != 120")
+
+    if parsed["first_message_line"] is None or parsed["last_message_line"] is None:
+        raise VerificationError("lifecycle_message_missing", "no message records")
+    if not (
+        events[2][0] < parsed["first_message_line"]
+        and parsed["last_message_line"] < events[3][0]
+    ):
+        raise VerificationError(
+            "lifecycle_order_invalid", "messages are outside subscribe/close"
+        )
+    return {
+        "records": sum(counts.values()),
+        "record_counts": {kind: counts[kind] for kind in expected_counts},
+        "data_messages": data_messages,
+        "acks": acks,
+        "http_status": 101,
+        "outcome": "completed_bounded_window",
+        "reconnects": 0,
+        "errors": 0,
+        "disconnects": 0,
+        "credentials_used": False,
+        "background_processes_started": 0,
+        "close_frame_sent": True,
+    }
+
+
+def global_first_last(parsed: dict) -> dict:
+    stats = parsed["stats"]
+    return {
+        "first_receive_utc": parsed["min_data_receive"],
+        "last_receive_utc": parsed["max_data_receive"],
+        "first_exchange_ts": str(parsed["min_data_exchange_ts"]),
+        "last_exchange_ts": str(parsed["max_data_exchange_ts"]),
+        "max_receive_gap_seconds": round(
+            max(float(stat["max_receive_gap_seconds"]) for stat in stats.values()), 6
+        ),
+        "duplicate_receive_ns": parsed["duplicate_receive_ns"],
+        "timestamp_regressions": sum(
+            stat["timestamp_regressions"] for stat in stats.values()
+        ),
+    }
+
+
+def verify(root: Path, expected_raw_sha256: str | None = None) -> dict:
+    before = hash_inputs(root)
+    errors = []
+    report = {"package_root": str(root), "status": "fail"}
+    try:
+        manifest, unlisted = verify_members(root)
+        capture_dir = root / "capture"
+        if expected_raw_sha256 is not None:
+            actual_raw = sha256_bytes((capture_dir / "raw.jsonl").read_bytes())
+            if actual_raw != expected_raw_sha256:
+                raise VerificationError(
+                    "external_raw_sha256_mismatch",
+                    f"expected {expected_raw_sha256}, found {actual_raw}",
+                )
+        summary = json.loads((capture_dir / "summary.json").read_text(encoding="utf-8"))
+        parsed = parse_raw(capture_dir, summary)
+        compare_with_coverage(capture_dir, parsed["stats"])
+        compare_with_summary(summary, parsed["stats"])
+        compare_with_verification(capture_dir, parsed)
+        funding = verify_funding(capture_dir, parsed, summary)
+        lifecycle = verify_lifecycle(parsed, summary)
+        global_stats = global_first_last(parsed)
+        report.update(
+            {
+                "status": "pass",
+                "members_verified": len(manifest),
+                "members": {name: meta["sha256"] for name, meta in manifest.items()},
+                "unlisted_files": sorted(unlisted),
+                "streams": {
+                    "expected": 24,
+                    "observed": len(parsed["stats"]),
+                    "with_ack": sum(
+                        bool(stat["ack_count"]) for stat in parsed["stats"].values()
+                    ),
+                    "with_data": sum(
+                        stat["messages"] > 0 for stat in parsed["stats"].values()
+                    ),
+                    "zero_message": [
+                        key
+                        for key, stat in parsed["stats"].items()
+                        if stat["messages"] == 0
+                    ],
+                },
+                "stream_counts": {
+                    key: {
+                        "messages": stat["messages"],
+                        "rows": stat["rows"],
+                        "acks": stat["ack_count"],
+                        "first_exchange_ts": stat["first_exchange_ts"],
+                        "last_exchange_ts": stat["last_exchange_ts"],
+                        "first_receive_utc": stat["first_receive_utc"],
+                        "last_receive_utc": stat["last_receive_utc"],
+                        "max_receive_gap_seconds": stat["max_receive_gap_seconds"],
+                        "timestamp_regressions": stat["timestamp_regressions"],
+                    }
+                    for key, stat in parsed["stats"].items()
+                },
+                "global": global_stats,
+                "funding": funding,
+                "lifecycle": lifecycle,
+                "reconciled": {
+                    "members": True,
+                    "coverage_csv": True,
+                    "summary_channels": True,
+                    "verification_json": True,
+                    "funding_snapshots": True,
+                },
+            }
+        )
+    except VerificationError as exc:
+        errors.append({"code": exc.code, "detail": exc.detail})
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        errors.append(
+            {"code": "verification_exception", "detail": f"{type(exc).__name__}: {exc}"}
+        )
+
+    after = hash_inputs(root)
+    unchanged = before == after
+    report["input_hashes_unchanged"] = unchanged
+    report["input_files"] = len(before)
+    report["input_before_sha256"] = {
+        name: meta["sha256"] for name, meta in before.items()
+    }
+    report["input_after_sha256"] = {
+        name: meta["sha256"] for name, meta in after.items()
+    }
+    if not unchanged:
+        report["status"] = "fail"
+        errors.append(
+            {
+                "code": "input_changed_during_verification",
+                "detail": "at least one input file content hash changed while verifying",
+            }
+        )
+    report["errors"] = errors
+    if errors:
+        report["status"] = "fail"
+    return report
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("package_root", nargs="?", default=".")
+    parser.add_argument(
+        "--expected-raw-sha256",
+        default=None,
+        help="optional external anchor (e.g. delivery raw SHA) checked against capture/raw.jsonl",
+    )
+    args = parser.parse_args()
+    try:
+        root = resolve_root(args.package_root)
+    except VerificationError as exc:
+        print(
+            json.dumps(
+                {"status": "fail", "errors": [{"code": exc.code, "detail": exc.detail}]}
+            )
+        )
+        return 2
+    report = verify(root, expected_raw_sha256=args.expected_raw_sha256)
+    print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+    return 0 if report["status"] == "pass" else 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
