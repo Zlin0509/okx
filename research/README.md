@@ -18,4 +18,6 @@ python3 -m research.statistics verify
 
 P2 增量勘误以 M3B_REPORT_R2.md／M3B_INTEGRATION_R2.md 为准，两份文档从机器结果生成原始／Holm／BY 数值。每个筛后价格／收益模型携带 synthetic、screen-only 来源、用途边界和完整族绑定；显式真实用途拒绝。旧文档和冻结保留，新统一冻结为 M3B_SOURCE_FREEZE_V3.json，新参考为 M3B_EXPECTED_R2.json；statistical qualified 和生成器假阳性记录不变。
 
+普通会员费率合成重算：`python3 -m research.fee_scenarios verify`（标准库，无需统计依赖）。首次保存逐笔明细及中文报告可用 `python3 -m research.fee_scenarios write`，拒绝覆盖已有目录。全 Taker 5 bps／Maker 2 bps 及加倍手续费压力；固定原人工成交路径，不输出真实收益、年化或夏普。来源、范围及必要测试见 FEE_SCENARIOS_PLAN.md、FEE_SOURCES.json、FEE_VALIDATION_V1.md，新源冻结 FEE_SOURCE_FREEZE_V1.json 保留旧冻结。
+
 真实 origin／真实时点元数据未知拒绝；不得运行真实缓存审计、真实选参或输出样本外／上线结论。仅代码历史不含原始快照／真实结果／受控审计目录。合成黄金／统计参考文件是代码测试期望，原始数据隔离另行核验。受控 bundle 不公开推送。旧范围偏差和应用并发未决 P1 保留，不因本轮全绿而关闭。
