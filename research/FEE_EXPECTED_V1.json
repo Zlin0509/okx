@@ -1,0 +1,18 @@
+{
+  "REPORT.md": {
+    "bytes": 3401,
+    "sha256": "bb77b1ae59597591a72c1c1c31e36b2cd5ef1fb841229b1737412e7743bc3ec8"
+  },
+  "costs.json": {
+    "bytes": 997831,
+    "sha256": "2505b246c950c7970161c4a4a9f0de8e9da24f8fb3a613e03d1d5a6787e43d5d"
+  },
+  "fills.csv": {
+    "bytes": 224117,
+    "sha256": "f03bd127d0d97a44b8ae81adb9bb1676bf09ada262fd853b846bdbd0db14b263"
+  },
+  "funding.csv": {
+    "bytes": 32950,
+    "sha256": "1b75d206d009e2caf993ec967806737afffd436181d66605cc0c23b6336a4da6"
+  }
+}
