@@ -1,0 +1,18 @@
+{
+  "source": "https://www.okx.com/en-us/help/how-to-calculate-the-contract-transaction-fee",
+  "title": "How are futures trading fees calculated on OKX?",
+  "checked_date_utc": "2026-11-14",
+  "page_published": "2023-03-20",
+  "page_updated": "2026-08-26",
+  "maker_bps": "2",
+  "taker_bps": "5",
+  "tier": "public Lv.1 assumption, not authenticated account verification",
+  "formula": "USDT-linear fee per actual fill = absolute filled base quantity times actual fill price times fee rate; charge opening and closing separately",
+  "maker_definition": "Adds resting liquidity; a limit order can instead take liquidity",
+  "exceptions": {
+    "region_applicability": "unverified; public article says applicability can differ",
+    "contract_specific_schedule": "unverified, no special fee applied",
+    "account_tier_and_rebates": "unverified; no credentials accessed or rebates assumed",
+    "historical_fee_schedule": "not reconstructed; fixed current public assumption only"
+  }
+}
