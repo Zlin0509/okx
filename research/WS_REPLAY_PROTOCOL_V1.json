@@ -1,0 +1,17 @@
+{
+  "version": "ws-replay-1",
+  "grid_ns": 1000000000,
+  "price_max_age_ns": 2000000000,
+  "funding_snapshot_max_age_ns": 120000000000,
+  "channels": ["tickers", "mark-price", "funding-rate"],
+  "symbols": ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP", "XRP-USDT-SWAP", "DOGE-USDT-SWAP", "BNB-USDT-SWAP", "LINK-USDT-SWAP", "AVAX-USDT-SWAP"],
+  "source": "wss://ws.okx.com/ws/v5/public",
+  "historical_model_permission": false,
+  "daily_history_observations": 0,
+  "minimum_signal_days": 56,
+  "statistical_training_days": 512,
+  "listing_age_days": 180,
+  "listing_metadata_status": "unknown",
+  "net_funding_cashflow": null,
+  "real_return_metrics": "unavailable"
+}

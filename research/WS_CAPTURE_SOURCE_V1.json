@@ -1,0 +1,13 @@
+{
+  "attachment_id": "01a1d7c9-a6c9-71b1-8d52-70f2cdeb3c28",
+  "filename": "OKX_LIVE_PUBLIC_WS_120S_20261114.zip",
+  "zip_sha256": "8a21756ca5b958e682dccb4bb9a0945c8bb4856db53808aaa4adff5a86f167d9",
+  "raw_member": "capture/raw.jsonl",
+  "raw_sha256": "5d0fab71fa1274d2d1606e18e011ed927dfc8b6e6c739b66095bb779b055c9e0",
+  "authorization": "Only this already independently verified 120-second attachment, existing controlled issue audit recipients",
+  "official_field_documentation": "https://www.okx.com/docs-v5/en/#public-data-websocket-funding-rate-channel",
+  "official_mark_documentation": "https://www.okx.com/docs-v5/en/#public-data-websocket-mark-price-channel",
+  "documentation_checked_utc": "2026-11-14",
+  "funding_interpretation": "settled state can describe previous-cycle settlement; state snapshots never generate account funding cashflow in this adapter",
+  "sequence_completeness": "unknown; no sequence-level guarantee"
+}
