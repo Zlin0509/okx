@@ -20,4 +20,6 @@ P2 增量勘误以 M3B_REPORT_R2.md／M3B_INTEGRATION_R2.md 为准，两份文�
 
 普通会员费率合成重算：`python3 -m research.fee_scenarios verify`（标准库，无需统计依赖）。首次保存逐笔明细及中文报告可用 `python3 -m research.fee_scenarios write`，拒绝覆盖已有目录。全 Taker 5 bps／Maker 2 bps 及加倍手续费压力；固定原人工成交路径，不输出真实收益、年化或夏普。来源、范围及必要测试见 FEE_SCENARIOS_PLAN.md、FEE_SOURCES.json、FEE_VALIDATION_V1.md，新源冻结 FEE_SOURCE_FREEZE_V1.json 保留旧冻结。
 
+已授权 WS 附件的离线数据接入／质量回放：`python3 -m research.ws_replay ./OKX_LIVE_PUBLIC_WS_120S_20261114.zip --output ./new_ws_replay`，只需标准库。外部 ZIP／raw 锚和 peer 只读入口先校验，再保留可得时点生成诊断；不接账户、不推导资金费现金流或策略收益。数据不随仅代码 Git 历史交付，须由有权限的接收方另行提供同一附件。完整说明见 WS_REPLAY_GUIDE_V1.md；旧入口的真实 origin 拒绝指模型／收益许可，这个 WS 入口只允许冻结附件的数据质量回放。
+
 真实 origin／真实时点元数据未知拒绝；不得运行真实缓存审计、真实选参或输出样本外／上线结论。仅代码历史不含原始快照／真实结果／受控审计目录。合成黄金／统计参考文件是代码测试期望，原始数据隔离另行核验。受控 bundle 不公开推送。旧范围偏差和应用并发未决 P1 保留，不因本轮全绿而关闭。
