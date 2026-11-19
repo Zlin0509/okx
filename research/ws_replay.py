@@ -20,7 +20,7 @@ from .ws_package import read_capture
 from .ws_view import MarketView, readonly
 
 ROOT = Path(__file__).resolve().parent.parent
-FREEZE = ROOT / "research/WS_SOURCE_FREEZE_V1.json"
+FREEZE = ROOT / "research/WS_SOURCE_FREEZE_V2.json"
 PROTOCOL = ROOT / "research/WS_REPLAY_PROTOCOL_V1.json"
 SOURCE = ROOT / "research/WS_CAPTURE_SOURCE_V1.json"
 
@@ -158,6 +158,9 @@ def replay(events, spec, *, on_frame=None):
             state.clear()
             connected = False
         elif kind == "handshake":
+            # A handshake starts a fresh state even if the capture omitted connect_attempt.
+            previous_funding.clear()
+            state.clear()
             connected = event["payload"].get("http_status") == 101
             if connected and disconnected_at is not None:
                 disconnects.append(
@@ -170,9 +173,13 @@ def replay(events, spec, *, on_frame=None):
         ):
             connected = False
             state.clear()
+            previous_funding.clear()
             if kind != "local_close" and disconnected_at is None:
                 disconnected_at = event["available_ns"]
         elif kind == "data":
+            # normalize retains every raw arrival; disconnected data is evidence only.
+            if not connected:
+                return
             key = event["symbol"] + "/" + event["channel"]
             if event["channel"] == "funding-rate":
                 funding.append({**event, "interpretation": "state_snapshot_only", "inferred_cashflow": None})
@@ -188,7 +195,7 @@ def replay(events, spec, *, on_frame=None):
                         }
                     )
                 previous_funding[event["symbol"]] = new
-            if connected and (key not in state or event["exchange_ts_ms"] >= state[key]["exchange_ts_ms"]):
+            if key not in state or event["exchange_ts_ms"] >= state[key]["exchange_ts_ms"]:
                 state[key] = {**event, "epoch": epoch}
 
     for tick in range(start, stop + 1, grid):
