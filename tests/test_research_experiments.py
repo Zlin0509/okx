@@ -1,6 +1,7 @@
 """Synthetic-only integration and negative tests. No real inputs or historical cache fixtures."""
 
 import copy
+import json
 from dataclasses import replace
 
 import pytest
@@ -114,6 +115,18 @@ def test_changed_training_or_extra_configuration_cannot_reuse_screen(experiment)
         run_configuration(cfg, batch, changed, "base")
     with pytest.raises(Rejected):
         run_configuration({**cfg, "entry_z": 0.1}, batch, inputs, "base")
+
+
+def test_serialized_family_preserves_same_synthetic_models_and_results(experiment):
+    inputs, _, batch = experiment
+    cfg = protocol()["configs"][0]
+    restored = json.loads(json.dumps(batch))
+    original = run_configuration(cfg, batch, inputs, "base")
+    assert run_configuration(cfg, restored, inputs, "base") == original
+    entries = [e for e in original["signals"] if e["action"] == "entry"]
+    assert entries
+    assert entries[0]["model"]["origin"] == "synthetic_test"
+    assert entries[0]["model"]["price"]["provenance"]["screen_only"] is True
 
 
 def test_shared_symbol_opposing_legs_do_not_net_capacity(experiment):

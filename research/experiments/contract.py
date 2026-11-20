@@ -3,6 +3,7 @@
 import fcntl
 import json
 import math
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -91,6 +92,9 @@ class Journal:
                 "event": "experiment",
                 "at_utc": datetime.now(UTC).isoformat(),
                 "registration_sha256": REGISTRATION_SHA,
+                "HEAD": subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], cwd=ROOT.parents[1], text=True
+                ).strip(),
                 **row,
             },
         )

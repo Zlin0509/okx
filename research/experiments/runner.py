@@ -22,7 +22,7 @@ from .strategy import Strategy
 from .universe import candidate_family, pool_at
 
 ROOT = Path(__file__).resolve().parents[2]
-FREEZE = Path(__file__).with_name("SOURCE_FREEZE_R1_V2.json")
+FREEZE = Path(__file__).with_name("SOURCE_FREEZE_R1_V3.json")
 
 
 class ExperimentEngine(CausalEngine):
@@ -146,10 +146,9 @@ def run_configuration(cfg, batch, inputs, scenario):
         raise Rejected("unregistered_experiment", "Exact six configuration definitions required")
     screen_view = asof(observations, batch["decision_ts"] // DAY)
     pool = pool_at(screen_view.ts, metadata, turnover, screen_view.observations, universe_verified=True)
-    if (
-        pool["status"] != "eligible"
-        or candidate_family(pool["members"], p["synthetic"]["core_anchors"]) != batch["family"]
-    ):
+    if pool["status"] != "eligible" or canonical(
+        candidate_family(pool["members"], p["synthetic"]["core_anchors"])
+    ) != canonical(batch["family"]):
         raise Rejected("pool_family_mismatch", "Statistical family must match the as-of admitted universe")
     plan = FamilyPlan(
         "experiment_R1_frozen_pool", tuple(Candidate(c["id"], tuple(c["symbols"])) for c in batch["family"])

@@ -9,6 +9,7 @@ from .contract import protocol
 
 def pool_at(ts, metadata, turnover, observations, *, universe_verified):
     p = protocol()["pool"]
+    warmup = max(protocol()["statistics"]["qualification_window"], 112)
     unknown, rejected, qualified = {}, {}, []
     if universe_verified is not True:
         return {
@@ -29,7 +30,7 @@ def pool_at(ts, metadata, turnover, observations, *, universe_verified):
         ):
             reasons.append("not_tradable")
         first = ((max(meta["listing"], meta["continuous"]) + DAY - 1) // DAY) * DAY + DAY - 1
-        if ts < first + (p["age_days"] + 112) * DAY:
+        if ts < first + (p["age_days"] + warmup) * DAY:
             reasons.append("age_or_max_signal_warmup_not_met")
         values = []
         for lag in range(1, 31):
@@ -45,7 +46,7 @@ def pool_at(ts, metadata, turnover, observations, *, universe_verified):
                 values.append(value)
             except (ValueError, KeyError):
                 reasons.append("invalid_lagged_volCcyQuote")
-        for lag in range(113):
+        for lag in range(warmup + 1):
             row = observations.get(ts - lag * DAY)
             if row is None or row.available_at > ts or symbol not in row.prices:
                 reasons.append("missing_or_unavailable_common_price_window")
