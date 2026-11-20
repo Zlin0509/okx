@@ -1,0 +1,83 @@
+{
+  "version": "ZLIN-11-real-research-R1",
+  "registered_date_utc": "2026-11-20",
+  "status": "leader_registration_before_new_return_results; independent_preregistration_review_required",
+  "controlled_checkpoint": "77501e6",
+  "code_checkpoint": "7c70532",
+  "objective": "medium-term cross-coin spread and relative-return convergence; no promised profit",
+  "precedence": "Preserve existing stricter frozen constraints; stop and report any conflict before running returns. Synthetic thresholds are not evidence of real qualification.",
+  "hypotheses": {
+    "primary": "lagged log-price residual mean reversion with point-in-time qualified pair or basket",
+    "secondary": "relative-return residual mean reversion, separately reported and budgeted",
+    "primary_parameters": {"lookback_days": 56, "entry_z": 2.0, "exit_z": 0.5, "break_z": 4.0, "timeout_days": 28, "entry_every_days": 7},
+    "qualification": "Retain frozen EG/ADF/stability methods, complete-family binding and point-in-time eligibility. Never promote synthetic permits to real permits. Selection uses training/validation only.",
+    "risk": {"target_gross": 0.8, "target_asset_absolute": 0.24, "hard_gross": 1.0, "hard_asset_absolute": 0.25, "aggregate_shared_symbols_without_netting": true, "initial_equity_usdt": 10000, "orders_after_signal_available_at": true}
+  },
+  "calendar": {
+    "training": ["2021-01-01", "2023-12-31"],
+    "validation": ["2024-01-01", "2024-12-31"],
+    "original_locked_test": ["2025-01-01", "2026-10-31"],
+    "original_locked_test_status": "integrity_unverified; must not call untouched until independent exposure audit",
+    "known_exposure": "M1 data quality and eligibility audits, legacy preflights with uncertain counts, once-recorded missing-mark integration, and disclosed cached audit; no claim of clean OOS follows from absence of NAV alone",
+    "quarantine": ["2026-08-14", "2026-10-31"],
+    "quarantine_policy": "79-day funding integration window is diagnostic only, excluded from confirmatory scoring and parameter selection",
+    "test_integrity_gate": "Before any strategy return calculation, independently inventory all prior exposures and declare exact eligible test dates. Exposed dates stay labelled exposed. No performance-based exclusions or relabelling. If fewer than 365 eligible daily test observations remain, final acceptance is unavailable.",
+    "future_reserve_if_original_test_invalid": ["2026-11-21", "2027-11-20"],
+    "future_reserve_policy": "Unobserved prospective reserve at registration; not available evidence today. No shortening or reuse for tuning. Engineering and explicitly labelled exploration may continue while it accrues.",
+    "warmup": "180-day verified listing age plus required lagged liquidity and model warmup; no zero-fill; purge overlapping positions at train/validation/test boundaries and account for actual closing costs; no fabricated terminal fills"
+  },
+  "costs": {
+    "base_fee_bps_per_fill": 5,
+    "base_adverse_slippage_bps_per_fill": 5,
+    "maker_reference_fee_bps_per_fill": 2,
+    "maker_reference_is_acceptance_evidence": false,
+    "stress_fee_bps_per_fill": 10,
+    "stress_adverse_slippage_bps_per_fill": 10,
+    "funding": "actual historical signed settlements at historical settlement marks and actual cadence; missing rates or marks refuse costed acceptance; current WS snapshots never become settlement cashflow",
+    "fee_history": "Public Lv1 constant-rate scenario, not verified historical account fees; report regional/instrument exceptions separately",
+    "borrow": "no spot borrowing; any later borrowing requires actual rates and new preregistration",
+    "slippage_accounting": "embedded in execution prices exactly once",
+    "capacity": "For declared 10000-USDT research capital, per-symbol daily traded notional <=0.001 times preceding 30 complete days mean USDT quote turnover. This is a participation screen, not proof of executable capacity; insufficient venue constraints or market-depth evidence keeps capacity conclusion unavailable."
+  },
+  "baselines": {
+    "btc": "BTC spot buy-and-hold with buy/sell costs, no invented perpetual funding",
+    "equal_weight": "point-in-time eligible mainstream-coin spot equal-weight, weekly rebalance, same availability and cost conventions; unavailable spot prices must be reported, never substituted silently",
+    "cash": "zero-return USDT cash reference; depeg and custody risk outside this ledger",
+    "comparison": "Common dates and declared capital, no leverage rescaling after results; report net CAGR, drawdown, Sharpe and Calmar for each. Primary relative-value acceptance requires positive active return against cash and Sharpe >= both BTC and equal-weight. Report absolute return differences even when negative."
+  },
+  "confirmatory_gates": {
+    "minimum_eligible_test_days": 365,
+    "minimum_completed_relationship_round_trips": 30,
+    "base_net_cagr_min": 0.08,
+    "base_annualized_daily_sharpe_min": 1.0,
+    "base_max_drawdown_max": 0.15,
+    "base_calmar_min": 0.75,
+    "stress_net_cagr_min": 0.0,
+    "stress_annualized_daily_sharpe_min": 0.5,
+    "stress_max_drawdown_max": 0.20,
+    "sharpe_definition": "daily equity returns, 365 calendar-day annualization, zero cash reference; include no-trade days; zero variance is undefined and fails",
+    "cagr_definition": "elapsed actual calendar time; cannot annualize a short capture as research acceptance",
+    "calmar_definition": "net CAGR divided by positive maximum drawdown; undefined metrics cannot silently pass",
+    "robustness": "At least 3 of 4 prespecified primary neighbours have positive costed validation CAGR; no neighbour is selected using test. Report daily/monthly block-bootstrap uncertainty, all failures, turnover, exposure, pair attribution, downside and censoring. Do not call confidence established solely because a point estimate passes.",
+    "gate_rationale": "8% is an explicit research hurdle for low-leverage capital use, not a forecast; Sharpe 1 and Calmar .75 require risk-adjusted return; 15% drawdown follows the earlier 15% volatility budget as a separate cap; doubled costs test fragility; a full year and 30 completed books limit short-sample claims. All gates are conjunctive, cannot be lowered after results."
+  },
+  "experiment_budget": {
+    "maximum_real_configurations_this_round": 6,
+    "configurations": [
+      "primary: window56 entry2 exit0.5 break4 timeout28 weekly",
+      "neighbour: window28; all other primary parameters unchanged",
+      "neighbour: window112; all other primary parameters unchanged",
+      "neighbour: entry1.5; all other primary parameters unchanged",
+      "neighbour: entry2.5; all other primary parameters unchanged",
+      "secondary: relative-return residual; exact construction must be source-frozen and independently reviewed before any return computation"
+    ],
+    "confirmation": "Only one training/validation-selected configuration may consume eligible held-out test once. Deterministic verification of frozen output is not a new experiment; inspecting new configurations on test is forbidden.",
+    "selection": "Across qualified complete families on training, select highest validation net Sharpe among configurations passing data, risk, positive validation return and required neighbour robustness; ties choose lower turnover then primary. Secondary cannot substitute for failed primary robustness.",
+    "multiple_testing": "Holm FWER .05 across the full declared candidate-by-configuration hypothesis family, retain BY FDR comparison only; preserve every tested and unavailable member and test statistic. Do not count only survivors.",
+    "failure_policy": "Persist all failed and rejected runs. After this budget, preregister a reasoned new hypothesis/version using only permissible exploration data; consumed held-out test never becomes clean again. No endless rerun on a fixed test set.",
+    "preexecution_gate": "Commit and hash exact strategy definitions, eligible date lists, cost calendar, dependency lock, data manifests, limits and selection algorithm; independent preregistration review before calculating new strategy returns. Any ambiguity is resolved and frozen before returns, never after."
+  },
+  "first_milestone": "bounded official public-data coverage probe plus resumable downloader and machine-readable gaps; synthetic experiment wiring and preregistration review can proceed without market data",
+  "scope": "offline research only; no private credentials, real orders, automatic demo trading, production changes, data purchases, denied-path bypass or public controlled-data release",
+  "acceptance_not_yet_met": true
+}
