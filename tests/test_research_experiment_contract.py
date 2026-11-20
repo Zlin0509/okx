@@ -1,5 +1,6 @@
 """Standard-library mock contract tests, usable without statistical dependencies or market caches."""
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -36,7 +37,10 @@ def data():
         for s in symbols
     }
     vol = {
-        s: {ts - i * DAY: {"volCcyQuote": "20000000", "available_at": ts - i * DAY} for i in range(1, 31)}
+        s: {
+            ts - i * DAY: {"volCcyQuote": "20000000", "available_at": ts - i * DAY, "confirm": "1"}
+            for i in range(1, 31)
+        }
         for s in symbols
     }
     return ts, meta, vol, obs
@@ -168,3 +172,45 @@ class ExperimentContractTests(unittest.TestCase):
             ]:
                 with self.subTest(cfg=cfg, origin=origin), self.assertRaises(Rejected):
                     j.reserve(cfg, "training_validation", binding, origin=origin)
+
+    def test_fixed_order_ties_secondary_failure_and_unchanged_retry_budget(self):
+        rows = validation()
+        rows["primary"]["status"] = "unavailable"
+        rows["returns"]["status"] = "failed"
+        self.assertEqual(select_validation(rows), "window28")
+        with tempfile.TemporaryDirectory() as folder:
+            j = Journal(Path(folder) / "journal.jsonl")
+            binding = dict.fromkeys(
+                ("data_sha256", "family_sha256", "source_sha256", "dates_sha256"), "2" * 64
+            )
+            token = j.reserve("returns", "training_validation", binding, origin="synthetic_test")
+            j.finish(token, {"reason": "mock_secondary_failure"}, "failed")
+            retry = j.reserve("returns", "training_validation", binding, origin="synthetic_test", retry=True)
+            j.finish(retry, {"reason": "unchanged_mock_retry"}, "failed")
+            records = read_log(j.path)
+            self.assertEqual(len({e["config"] for e in records if e.get("action") == "reserve"}), 1)
+            self.assertEqual(
+                [e for e in records if e.get("token") == retry and e.get("action") == "reserve"][0][
+                    "retry_of"
+                ],
+                token,
+            )
+
+    def test_r2_definition_anchors_and_unavailable_clean_dates(self):
+        root = Path(__file__).resolve().parents[1] / "research/experiments"
+        d = json.loads((root / "DECISIONS_R2.json").read_text())
+        anchors = json.loads((root / "LEGACY_ANCHORS_R2.json").read_text())
+        self.assertEqual(len(anchors["anchors"]), 5)
+        self.assertTrue(all(v["matches_leader"] for v in anchors["anchors"].values()))
+        self.assertEqual(d["bootstrap"]["replicates"], 10000)
+        self.assertEqual(d["bootstrap"]["block_days"], 28)
+        self.assertEqual(
+            d["equal_weight_baseline"]["decision"],
+            "Monday 00:00 UTC using only available preceding completed days",
+        )
+        self.assertIsNone(real_preflight()["exact_eligible_test_dates"])
+
+    def test_unconfirmed_turnover_refuses_admission(self):
+        ts, meta, vol, obs = data()
+        vol["A"][ts - DAY]["confirm"] = "0"
+        self.assertNotIn("A", pool_at(ts, meta, vol, obs, universe_verified=True)["members"])

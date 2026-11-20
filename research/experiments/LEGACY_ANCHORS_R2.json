@@ -1,0 +1,34 @@
+{
+  "anchors": {
+    "research/FEE_SOURCE_FREEZE_V1.json": {
+      "matches_leader": true,
+      "sha256": "87773299613a58f8584b52920e76c26958542e282750e568176412d9ed23c01d"
+    },
+    "research/M3B_SOURCE_FREEZE_V3.json": {
+      "matches_leader": true,
+      "sha256": "cc856af94d7f3c40b24576bdbbcd16f245759d616f31650e4231f80a47fe5e8f"
+    },
+    "research/M3_R2_SOURCE_FREEZE.json": {
+      "matches_leader": true,
+      "sha256": "0530b7871483b1d643d35ddde40c497498449c6a267ec1d1000fcac56753d072"
+    },
+    "research/M3_R2_SOURCE_FREEZE_V2.json": {
+      "matches_leader": true,
+      "sha256": "6c6bfda7fd49fe879160ebea8be3229e29c7a487edaf6147395382371e59c772"
+    },
+    "research/WS_SOURCE_FREEZE_V2.json": {
+      "matches_leader": true,
+      "sha256": "a7e0f5271fdb2957f60ad6c03e5bf625ff4e3dfe91099a0689603e4c38ee12be"
+    }
+  },
+  "autolag": null,
+  "lags": 8,
+  "legacy_candidates": 6,
+  "legacy_raw_tests": 44,
+  "legacy_seed": 290411,
+  "minimum_observations": 256,
+  "new_probe": "separate source has73 common complete days; not a revision of M1",
+  "old_M1_snapshot": "previously frozen79 complete days; metadata only here, no raw cache read",
+  "old_fixture_is_not_real_universe": true,
+  "qualification_window": 512
+}

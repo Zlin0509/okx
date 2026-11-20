@@ -10,6 +10,8 @@ from .contract import protocol
 def pool_at(ts, metadata, turnover, observations, *, universe_verified):
     p = protocol()["pool"]
     warmup = max(protocol()["statistics"]["qualification_window"], 112)
+    close = ts - 1 if ts % DAY == 0 else ts
+    lag_start = 0 if ts % DAY == 0 else 1
     unknown, rejected, qualified = {}, {}, []
     if universe_verified is not True:
         return {
@@ -33,10 +35,10 @@ def pool_at(ts, metadata, turnover, observations, *, universe_verified):
         if ts < first + (p["age_days"] + warmup) * DAY:
             reasons.append("age_or_max_signal_warmup_not_met")
         values = []
-        for lag in range(1, 31):
-            t = ts - lag * DAY
+        for lag in range(lag_start, lag_start + 30):
+            t = close - lag * DAY
             row = turnover.get(symbol, {}).get(t)
-            if row is None or row.get("available_at", ts + 1) > ts:
+            if row is None or row.get("available_at", ts + 1) > ts or str(row.get("confirm")) != "1":
                 reasons.append("missing_or_unavailable_lagged_volCcyQuote")
                 continue
             try:
@@ -47,7 +49,7 @@ def pool_at(ts, metadata, turnover, observations, *, universe_verified):
             except (ValueError, KeyError):
                 reasons.append("invalid_lagged_volCcyQuote")
         for lag in range(warmup + 1):
-            row = observations.get(ts - lag * DAY)
+            row = observations.get(close - lag * DAY)
             if row is None or row.available_at > ts or symbol not in row.prices:
                 reasons.append("missing_or_unavailable_common_price_window")
                 break

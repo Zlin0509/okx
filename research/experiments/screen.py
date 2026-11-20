@@ -69,9 +69,11 @@ def bind_family(analyses, failures, family, decision_ts):
     if unavailable:
         holm, by = {}, {}
     else:
-        # One full-family correction, not only surviving EG statistics. Stability non-rejection is not proof.
-        holm = adjust(expanded, sorted(expanded))
-        by = adjust(expanded, sorted(expanded), "fdr_by")
+        # R2: level ADF is diagnostic; primary EG+difference+stability family is never survivor-resized.
+        primary_ids = sorted(k for k in expanded if "/level:" not in k)
+        by_ids = sorted(k for k in expanded if k.endswith("/eg"))
+        holm = adjust(expanded, primary_ids)
+        by = adjust(expanded, by_ids, "fdr_by")
     permits = {}
     for c in family:
         for cfg in configs:

@@ -1,0 +1,97 @@
+{
+  "P2_1": {
+    "files": [
+      "DECISIONS_R2.json",
+      "LEGACY_ANCHORS_R2.json",
+      "SOURCE_FREEZE_R2.json"
+    ],
+    "legacy": {
+      "L": 13,
+      "N": 6,
+      "minimum_observations": 256,
+      "qualification_window": 512,
+      "raw": 44,
+      "seed": 290411
+    }
+  },
+  "P2_2": {
+    "files": [
+      "registry.py",
+      "screen.py"
+    ],
+    "per_decision_registry_required": true,
+    "real_registry": "unavailable; never substitute current8 or legacy6",
+    "repeated_time_FWER_proven": false,
+    "synthetic_example_only": {
+      "BY_EG": 204,
+      "L": 74,
+      "N": 34,
+      "config_members": 204,
+      "primary_Holm": 1056,
+      "raw": 1500
+    }
+  },
+  "P2_3": {
+    "file": "DECISIONS_R2.json coverage + controlled EXPOSURES-R2.json",
+    "latest_probe_common_days": 73,
+    "old_M1_79_preserved": true,
+    "quarantine_calendar_days": 79,
+    "unfilled_dates": [
+      "2026-08-14",
+      "2026-08-15",
+      "2026-08-16",
+      "2026-08-17",
+      "2026-08-18",
+      "2026-08-19"
+    ]
+  },
+  "P2_4": {
+    "baseline": {
+      "decision": "Monday 00:00 UTC using only available preceding completed days",
+      "execution": "First recorded daily spot open strictly after decision available_at; with daily UTC opens this is Tuesday 00:00, not same-timestamp Monday fill; same rule for strategy",
+      "missing": "No forward-filled prices or fee-free terminal sales. Cash waits for recorded actual fills; disclose open terminal exposure and valuation. Same base/stress execution-cost conventions.",
+      "ranking": "Top 8 by lagged perpetual quote-turnover mean; ties lexicographic instId; minimum 6, otherwise baseline unavailable; full membership and exclusions frozen before return computation",
+      "universe": "At each weekly decision, verified globally applicable historical USDT linear perpetual universe, listed continuously >=180 days, with matching verified OKX USDT spot listing and complete lagged 30-day turnover; never infer global history from current live instruments or region-specific announcement first pages",
+      "weights": "1/N spot notional, no borrowing; BTC/ETH are not forced past eligibility/rank"
+    },
+    "bootstrap": {
+      "block_days": 28,
+      "interval": "2.5/97.5 percentile; report Sharpe, CAGR, drawdown and active return uncertainty; undefined resamples counted and disclosed, never silently discarded",
+      "method": "paired circular moving-block bootstrap of aligned daily strategy and baseline return vectors, including no-trade days",
+      "replicates": 10000,
+      "seed": 290411,
+      "use": "uncertainty disclosure only, not a new tuning objective or substitute for point-estimate gates; no post-result block-length choice"
+    },
+    "capacity": {
+      "interpretation": "participation screen only; no executable-capacity claim without venue constraints and depth evidence",
+      "limit": 0.001,
+      "numerator": "Sum abs(actual fill quantity * actual execution price) for all books and both directions of that symbol during UTC day; opening, closing, additions, reductions and reversals all included without netting",
+      "source": "OKX corresponding USDT linear perpetual confirmed daily volCcyQuote row[7], USDT, provider single-reported turnover; do not double for long+short or replace with spot turnover",
+      "window": "30 completed UTC days [decision_day-30d,decision_day); all confirm=1, available_at<=decision, finite nonnegative values; missing/invalid refuses capacity, zero is genuine observation, nonpositive mean refuses capacity"
+    },
+    "qualifying_trade": {
+      "censoring": "Unfilled requests and terminal open episodes do not count; preserve losses, fees and unrealized marks. Episodes overlapping split boundaries are purged from count and disclosed, not silently removed from NAV",
+      "partials": "Multiple partial/add/reduce fills inside the same episode count once; shared coins in distinct books are separately attributed, never netted",
+      "qualification": "All planned nonzero hedge legs must have established the intended hedged position within the frozen hedge-error tolerance at least once; orphan-leg cleanup is reported with its PnL but is not a completed qualifying relationship trade",
+      "reversal": "Close episode only at genuine zero crossing of actual position quantities; new opposite exposure opens a distinct episode. Preserve fill-level attribution and costs; no invented flat event",
+      "unit": "one relation-book episode, flat in all legs -> first actual entry fill -> all legs actually flat"
+    },
+    "source": "definitions exact leaderR2; baseline/count/bootstrap real execution not claimed"
+  },
+  "P2_5": {
+    "all_six_require_neighbour_robustness": true,
+    "secondary_failure_consumes_slot": true,
+    "selection": {
+      "failed_attempts": "Record all starts, rejection causes and repairs. Retry with unchanged configuration is logged, not a new configuration; changed signal/parameter is a new budgeted hypothesis and cannot reuse consumed test.",
+      "global_prerequisite": "At least 3 of the 4 fixed primary neighbours have positive costed validation CAGR, mandatory before ANY of the six configurations can be selected. If false, no candidate is selected, including secondary.",
+      "secondary_formula": "For each leg use daily log returns. At decision T, OLS dependent return on intercept plus hedge-leg returns using last 56 complete daily returns with endpoints <T and available_at<=T. Let e_d=rA_d-alpha-sum(beta_j*rj_d). Form 28-day rolling sums of e_d. Center/scale the latest such sum using the last 56 rolling-sum endpoints, all <T; requires 83 daily returns (84 prices). Freeze alpha,beta,mean,sd for an active book; thereafter use only newly available lagged endpoints, never refit active relations. Zero sd or missing history rejects. Entry/exit/break/timeout/weekly schedule and exposure limits are identical to primary.",
+      "secondary_source_gate": "Exact implementation, fitted quantities, hedge-notional mapping and numerical tests must match this formula and be source-frozen and independently reviewed before any real return calculation; no ad hoc seventh configuration",
+      "selection": "Among all six configurations satisfying data, risk, positive validation return and global prerequisite, choose highest validation net Sharpe, then lower turnover, then fixed configuration order with primary first. Secondary participates under identical gates and consumes its reserved slot even if rejected or fails."
+    },
+    "source": [
+      "contract.py",
+      "strategy.py"
+    ]
+  },
+  "status": "implemented_definitions_pending_independent_review_not_self_closed"
+}

@@ -17,12 +17,13 @@ from ..risk_trace import exposure_trace
 from ..synthetic_guard import GUARD_SCOPE, install
 from ..ws_view import readonly
 from .contract import Journal, protocol, real_preflight
+from .registry import build_registry
 from .screen import screen
 from .strategy import Strategy
 from .universe import candidate_family, pool_at
 
 ROOT = Path(__file__).resolve().parents[2]
-FREEZE = Path(__file__).with_name("SOURCE_FREEZE_R1_V3.json")
+FREEZE = Path(__file__).with_name("SOURCE_FREEZE_R2.json")
 
 
 class ExperimentEngine(CausalEngine):
@@ -36,7 +37,7 @@ class ExperimentEngine(CausalEngine):
         # Availability is measured at execution. Only the preceding 30 complete UTC days count.
         close = (frame.ts // DAY - 1) * DAY + DAY - 1
         values = [self.turnover.get(symbol, {}).get(close - lag * DAY) for lag in range(30)]
-        if any(v is None or v["available_at"] > frame.ts for v in values):
+        if any(v is None or v["available_at"] > frame.ts or str(v.get("confirm")) != "1" for v in values):
             self.record(
                 frame,
                 "rejected_capacity",
@@ -50,6 +51,15 @@ class ExperimentEngine(CausalEngine):
             / 30
             * number(protocol()["risk"]["daily_participation"])
         )
+        if limit <= 0 or any(number(v["volCcyQuote"]) < 0 for v in values):
+            self.record(
+                frame,
+                "rejected_capacity",
+                symbol=symbol,
+                book=order.leg.book,
+                reason="invalid_or_nonpositive_turnover",
+            )
+            return
         old = self.positions.get(order.leg)
         quantity = old.quantity if old else number(0)
         delta = (order.target - quantity) * order.fraction
@@ -96,7 +106,7 @@ def mock_inputs(series=None):
         for s in symbols
     }
     turnover = {
-        s: {t: {"volCcyQuote": str(20000000 + i * 1000), "available_at": t} for t in series}
+        s: {t: {"volCcyQuote": str(20000000 + i * 1000), "available_at": t, "confirm": "1"} for t in series}
         for i, s in enumerate(symbols)
     }
     start, stop = p["screen_day"] + 1, p["end_day_exclusive"]
@@ -139,39 +149,70 @@ def validate_adapter(market, *, funding_kind, origin):
 def run_configuration(cfg, batch, inputs, scenario):
     from ..statistics.core import Candidate, FamilyPlan, window_data
     from ..statistics.fixtures import asof
+    from .screen import check_batch
 
     market, observations, metadata, turnover = inputs
+    batches = {int(t): value for t, value in batch.items()} if "decision_ts" not in batch else {}
+    if batches:
+        batch = batches[min(batches)]
     p = protocol()
-    if cfg not in p["configs"] or batch["config_ids"] != [c["id"] for c in p["configs"]]:
+    if cfg not in p["configs"]:
         raise Rejected("unregistered_experiment", "Exact six configuration definitions required")
-    screen_view = asof(observations, batch["decision_ts"] // DAY)
-    pool = pool_at(screen_view.ts, metadata, turnover, screen_view.observations, universe_verified=True)
-    if pool["status"] != "eligible" or canonical(
-        candidate_family(pool["members"], p["synthetic"]["core_anchors"])
-    ) != canonical(batch["family"]):
-        raise Rejected("pool_family_mismatch", "Statistical family must match the as-of admitted universe")
-    plan = FamilyPlan(
-        "experiment_R1_frozen_pool", tuple(Candidate(c["id"], tuple(c["symbols"])) for c in batch["family"])
-    )
-    for candidate in plan.candidates:
-        _, sample = window_data(screen_view, candidate, plan)
-        if (
-            candidate.id in batch["analyses"]
-            and sample["training_sha256"] != batch["analyses"][candidate.id]["training_sha256"]
-        ):
-            raise Rejected("training_mismatch", "Every candidate binds the actual historical observations")
+    for checked in batches.values() if batches else [batch]:
+        check_batch(checked)
+        if checked["config_ids"] != [c["id"] for c in p["configs"]]:
+            raise Rejected("unregistered_experiment", "Complete six-configuration family required")
+        screen_view = asof(observations, checked["decision_ts"] // DAY)
+        decision_ts = checked.get("registry_decision_ts", screen_view.ts)
+        pool = pool_at(decision_ts, metadata, turnover, screen_view.observations, universe_verified=True)
+        if pool["status"] != "eligible" or canonical(
+            candidate_family(pool["members"], p["synthetic"]["core_anchors"])
+        ) != canonical(checked["family"]):
+            raise Rejected(
+                "pool_family_mismatch", "Statistical family must match the as-of admitted universe"
+            )
+        plan = FamilyPlan(
+            "experiment_R1_frozen_pool",
+            tuple(Candidate(c["id"], tuple(c["symbols"])) for c in checked["family"]),
+        )
+        for candidate in plan.candidates:
+            _, sample = window_data(screen_view, candidate, plan)
+            if (
+                candidate.id in checked["analyses"]
+                and sample["training_sha256"] != checked["analyses"][candidate.id]["training_sha256"]
+            ):
+                raise Rejected(
+                    "training_mismatch", "Every candidate binds the actual historical observations"
+                )
     validate_adapter(market, funding_kind="synthetic_settlement", origin="synthetic_test")
-    strategy = Strategy(cfg, batch, protocol()["synthetic"]["end_day_exclusive"] * DAY - 1)
+    end_ts = (protocol()["synthetic"]["end_day_exclusive"] - 1) * DAY
+    strategy = None if batches else Strategy(cfg, batch, end_ts)
     pools = []
 
     def driver(frame):
+        nonlocal strategy
+        if frame.ts in batches:
+            from .screen import check_batch
+
+            current_batch = batches[frame.ts]
+            check_batch(current_batch)
+            if current_batch["decision_ts"] > frame.ts:
+                raise Rejected("future_statistics", "No future screening passed to strategy")
+            if strategy is None:
+                strategy = Strategy(cfg, current_batch, end_ts)
+            else:
+                strategy.batch = current_batch
         pool = (
             pool_at(frame.ts, metadata, turnover, frame.observations, universe_verified=True)
-            if frame.ts % DAY == DAY - 1
-            else {"status": "not_a_close", "members": []}
+            if frame.ts % DAY == 0
+            else {"status": "not_a_decision", "members": []}
         )
-        if frame.ts % DAY == DAY - 1:
+        if frame.ts % DAY == 0:
             pools.append({"ts": frame.ts, **pool})
+        if strategy is None:
+            from ..decision_view import Decision
+
+            return Decision()
         return strategy(frame, readonly(pool))
 
     cost = protocol()["cost_scenarios"][scenario]
@@ -210,10 +251,13 @@ def run_configuration(cfg, batch, inputs, scenario):
             "scenario": scenario,
             "costs": cost,
             "pools": pools,
-            "signals": strategy.events,
+            "signals": strategy.events if strategy is not None else [],
             "cost_ledger": costs,
             "accounting": result,
             "holding_periods": holding_periods(result["ledger"]),
+            "qualifying_relationship_round_trips": None,
+            "baseline_metrics": None,
+            "bootstrap_intervals": None,
             "exposure": exposure_trace(result["ledger"]),
             "real_returns": None,
             "annualized_metrics": None,
@@ -237,11 +281,13 @@ def synthetic(output):
     journal = Journal(output / "experiments.jsonl")
     inputs = mock_inputs()
     market, series, metadata, turnover = inputs
-    view = asof(series, p["synthetic"]["screen_day"])
-    pool = pool_at(view.ts, metadata, turnover, view.observations, universe_verified=True)
-    family = candidate_family(pool["members"], p["synthetic"]["core_anchors"])
-    if pool["status"] != "eligible":
-        raise Rejected("synthetic_fixture_pool_unavailable", "Preserve refusal, never change pool by return")
+    registry = build_registry(market, series, metadata, turnover, universe_verified=True)
+    (output / "registry.json").write_bytes(canonical(registry))
+    if not registry or any(e["status"] != "available" for e in registry):
+        raise Rejected(
+            "point_in_time_registry_unavailable", "Complete metadata-only registry must precede all tests"
+        )
+    family = registry[0]["family"]
     binding = {
         "data_sha256": sha(
             canonical(
@@ -257,7 +303,7 @@ def synthetic(output):
                 )
             )
         ),
-        "family_sha256": sha(canonical({"family": family, "configs": p["configs"]})),
+        "family_sha256": sha(canonical(registry)),
         "source_sha256": sha(source),
         "dates_sha256": sha(canonical(market.frame_calendar)),
     }
@@ -267,12 +313,22 @@ def synthetic(output):
         for c in p["configs"]
     }
     try:
-        batch = screen(view, family, origin="synthetic_test")
-        (output / "screen.json").write_bytes(canonical(batch))
+        batches = {}
+        for entry in registry:
+            view = asof(series, entry["decision_ts"] // DAY - 1)
+            screened = screen(view, entry["family"], origin="synthetic_test")
+            screened["registry_decision_ts"] = entry["decision_ts"]
+            screened["registry_sha256"] = entry["registry_sha256"]
+            screened["family_sha256"] = sha(
+                canonical({k: v for k, v in screened.items() if k != "family_sha256"})
+            )
+            batches[entry["decision_ts"]] = screened
+        (output / "screen.json").write_bytes(canonical(batches))
+        batch = batches[min(batches)]
         runs = {}
         for cfg in p["configs"]:
             runs[cfg["id"]] = {
-                cost: run_configuration(cfg, batch, inputs, cost) for cost in p["cost_scenarios"]
+                cost: run_configuration(cfg, batches, inputs, cost) for cost in p["cost_scenarios"]
             }
             body = canonical(runs[cfg["id"]])
             (output / (cfg["id"] + ".json")).write_bytes(body)
@@ -295,7 +351,10 @@ def synthetic(output):
     manifest = {path.name: sha(path.read_bytes()) for path in output.iterdir() if path.suffix == ".json"}
     summary = {
         "status": "synthetic_wiring_completed",
+        "scheduled_decisions": len(registry),
         "family_candidates": len(family),
+        "primary_holm_members_per_decision": registry[0]["expected_counts"]["primary_holm"],
+        "BY_EG_members_per_decision": registry[0]["expected_counts"]["BY_EG"],
         "configuration_members": len(family) * 6,
         "test_ids": len(batch["tests"]),
         "unavailable_test_ids": len(batch["unavailable_test_ids"]),
@@ -314,7 +373,7 @@ def synthetic(output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("synthetic", "preflight", "real"))
-    parser.add_argument("--output", default="research/runtime/experiments_r1")
+    parser.add_argument("--output", default="research/runtime/experiments_r2")
     args = parser.parse_args()
     counts = install()
     from .input_guard import install as install_input_guard
@@ -324,7 +383,7 @@ def main():
     run_id = str(uuid.uuid4())
     common = {
         "run_id": run_id,
-        "operation": "experiments_R1",
+        "operation": "experiments_R2",
         "action": args.action,
         "HEAD": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "source_sha256": sha(FREEZE.read_bytes()),

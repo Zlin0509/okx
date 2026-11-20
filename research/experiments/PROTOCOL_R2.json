@@ -1,0 +1,163 @@
+{
+  "bootstrap": {
+    "block_days": 28,
+    "interval": "2.5/97.5 percentile; report Sharpe, CAGR, drawdown and active return uncertainty; undefined resamples counted and disclosed, never silently discarded",
+    "method": "paired circular moving-block bootstrap of aligned daily strategy and baseline return vectors, including no-trade days",
+    "replicates": 10000,
+    "seed": 290411,
+    "use": "uncertainty disclosure only, not a new tuning objective or substitute for point-estimate gates; no post-result block-length choice"
+  },
+  "configs": [
+    {
+      "break_z": 4.0,
+      "decision_every_days": 7,
+      "entry_z": 2.0,
+      "exit_z": 0.5,
+      "id": "primary",
+      "mode": "log_price",
+      "timeout_days": 28,
+      "window": 56
+    },
+    {
+      "break_z": 4.0,
+      "decision_every_days": 7,
+      "entry_z": 2.0,
+      "exit_z": 0.5,
+      "id": "window28",
+      "mode": "log_price",
+      "timeout_days": 28,
+      "window": 28
+    },
+    {
+      "break_z": 4.0,
+      "decision_every_days": 7,
+      "entry_z": 2.0,
+      "exit_z": 0.5,
+      "id": "window112",
+      "mode": "log_price",
+      "timeout_days": 28,
+      "window": 112
+    },
+    {
+      "break_z": 4.0,
+      "decision_every_days": 7,
+      "entry_z": 1.5,
+      "exit_z": 0.5,
+      "id": "entry15",
+      "mode": "log_price",
+      "timeout_days": 28,
+      "window": 56
+    },
+    {
+      "break_z": 4.0,
+      "decision_every_days": 7,
+      "entry_z": 2.5,
+      "exit_z": 0.5,
+      "id": "entry25",
+      "mode": "log_price",
+      "timeout_days": 28,
+      "window": 56
+    },
+    {
+      "break_z": 4.0,
+      "decision_every_days": 7,
+      "entry_z": 2.0,
+      "exit_z": 0.5,
+      "id": "returns",
+      "mode": "relative_return",
+      "timeout_days": 28,
+      "window": 56
+    }
+  ],
+  "cost_scenarios": {
+    "base": {
+      "fee_bps": 5,
+      "slippage_bps": 5
+    },
+    "stress": {
+      "fee_bps": 10,
+      "slippage_bps": 10
+    }
+  },
+  "decision_calendar": {
+    "daily_risk_utc_hour": 0,
+    "decision_utc_hour": 0,
+    "epoch_day_mod7": 4,
+    "execution": "strictly later recorded open; Monday00 decision ->Tuesday00 on daily grid",
+    "weekly_day": "Monday"
+  },
+  "decisions_sha256": "fda9dd48671a09cfb82993b3cd177363877bfe54057bfbbcc7eaf5d74d88e94d",
+  "performance_output": "no new real returns; synthetic accounting only, no CAGR/Sharpe or acceptance winner",
+  "pool": {
+    "age_days": 180,
+    "lag_days": 30,
+    "maximum_assets": 10,
+    "minimum_assets": 6,
+    "minimum_mean_usdt": 10000000,
+    "ranking": "lagged mean volCcyQuote descending; lexical symbol tie-break",
+    "rebuild": "each weekly entry; daily eligibility risk checks",
+    "relations": "all lexical oriented unordered pairs plus each other asset versus frozen core anchors if both admitted; retain all unavailable members",
+    "target_assets": 8
+  },
+  "real_enabled": false,
+  "real_required_artifacts": [
+    "historical_universe_manifest",
+    "complete_candidate_configuration_family",
+    "exact_eligible_dates",
+    "prior_exposure_audit",
+    "actual_funding_calendar_and_marks",
+    "spot_baseline_prices",
+    "venue_constraints_and_capacity",
+    "source_and_dependency_freeze",
+    "independent_preregistration_approval"
+  ],
+  "registration_sha256": "1b85d581f5605714bef3df66b3fd6da1fdf30449dba68e93152d8c3c228303f2",
+  "returns_definition": "For each leg use daily log returns. At decision T, OLS dependent return on intercept plus hedge-leg returns using last 56 complete daily returns with endpoints <T and available_at<=T. Let e_d=rA_d-alpha-sum(beta_j*rj_d). Form 28-day rolling sums of e_d. Center/scale the latest such sum using the last 56 rolling-sum endpoints, all <T; requires 83 daily returns (84 prices). Freeze alpha,beta,mean,sd for an active book; thereafter use only newly available lagged endpoints, never refit active relations. Zero sd or missing history rejects. Entry/exit/break/timeout/weekly schedule and exposure limits are identical to primary.",
+  "risk": {
+    "book_gross_fraction": 0.4,
+    "daily_participation": 0.001,
+    "hard_asset_absolute": 0.25,
+    "hard_gross": 1,
+    "hedge_error_limit": 0.05,
+    "initial_equity": 10000,
+    "target_asset_absolute": 0.24,
+    "target_gross": 0.8
+  },
+  "secondary": {
+    "normalization_endpoints": 56,
+    "ols_return_endpoints": 56,
+    "required_prices": 84,
+    "required_returns": 83,
+    "rolling_sum_days": 28
+  },
+  "selection": "Among all six configurations satisfying data, risk, positive validation return and global prerequisite, choose highest validation net Sharpe, then lower turnover, then fixed configuration order with primary first. Secondary participates under identical gates and consumes its reserved slot even if rejected or fails.",
+  "statistics": {
+    "BY": "EG members across all six configurations only; BY .05 diagnostic only, never substitute for failed Holm",
+    "library": "reuse pinned M3B methods and dependency lock; no generator truth in screening",
+    "primary_correction": "For N declared eligible candidates and L candidate-leg incidences: EG=6N, level_ADF=6L, difference_ADF=6L, stability=12N; total raw tests=18N+12L. One primary Holm family contains EG+difference_ADF+stability, size 18N+6L. Level ADF remains separately disclosed compatibility diagnostics.",
+    "qualification_window": 512,
+    "signal_hedge_windows": "28/56/112 independently of fixed qualification window"
+  },
+  "synthetic": {
+    "core_anchors": [
+      "W",
+      "X"
+    ],
+    "end_day_exclusive": 560,
+    "screen_day": 512,
+    "seed": 290411,
+    "symbols": [
+      "BASKET",
+      "BROKEN",
+      "INDEPENDENT",
+      "RW",
+      "SY",
+      "W",
+      "X",
+      "Y"
+    ],
+    "use_existing_statistics_fixture": true
+  },
+  "test_consumption": "one selected configuration once per registered test/data/source binding; deterministic reproduction must match frozen result hash; local journal not external attestation",
+  "version": "R2-wiring-synthetic-only"
+}

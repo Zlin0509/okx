@@ -1,0 +1,15 @@
+{
+  "actual_historical_universe": null,
+  "baseline_implementation": "definition frozen; no real spot data or baseline returns run",
+  "bootstrap_implementation": "method frozen at28-day paired circular blocks/10000replicates/seed290411; no real bootstrap executed",
+  "exact_eligible_test_dates": null,
+  "exposure_manifest_sha256": "24ab7c202e2cb54afac596109e980500c9a370efd11df965803556a13d0a40fd",
+  "exposure_metadata_is_not_market_return_data": true,
+  "new_probe_funding_complete_days": 73,
+  "old_M1_funding_complete_days": 79,
+  "quarantine_calendar_days": 79,
+  "real_candidate_registry": null,
+  "release": "not authorized by this manifest",
+  "round_trip_count_implementation": "holding period output is not the30 qualifying-trade counter; real count blocked pending implementation/independent review",
+  "status": "unavailable"
+}

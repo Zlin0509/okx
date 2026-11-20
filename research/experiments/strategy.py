@@ -33,6 +33,7 @@ class TaggedModel:
     source: str
     family_sha256: str
     training_sha256: str
+    mean: float = 0.0
 
     @property
     def symbols(self):
@@ -42,18 +43,29 @@ class TaggedModel:
     def vector(self):
         return (1.0,) + tuple(-b for b in self.beta)
 
-    def zscore(self, current, previous):
+    def zscore(self, current, previous, history=None, ts=None):
         if self.origin != "synthetic_test" or self.source != "synthetic_statistical_screen_only":
             raise Rejected("real_model_use_disabled", "Synthetic screen-only model")
         if self.mode == "log_price":
             return self.price.zscore(current)
-        now, before = logs(current, self.symbols), logs(previous, self.symbols)
-        returns = [a - b for a, b in zip(now, before, strict=True)]
-        return (
-            returns[0]
+        if history is None or ts is None:
+            raise Rejected("return_history_required", "R2 requires 28 lagged daily residuals")
+        rows = [r for t, r in sorted(history.items()) if t < ts and r.available_at <= ts][-29:]
+        if (
+            len(rows) != 29
+            or rows[-1].ts != ts - 1
+            or any(b.ts - a.ts != DAY for a, b in zip(rows, rows[1:], strict=False))
+        ):
+            raise Rejected("missing_observation", "28 complete consecutive lagged daily returns required")
+        values = [logs(r.prices, self.symbols) for r in rows]
+        residuals = [
+            b[0]
+            - a[0]
             - self.intercept
-            - math.fsum(b * r for b, r in zip(self.beta, returns[1:], strict=True))
-        ) / self.sd
+            - math.fsum(beta * (y - x) for beta, x, y in zip(self.beta, a[1:], b[1:], strict=True))
+            for a, b in zip(values, values[1:], strict=False)
+        ]
+        return (math.fsum(residuals) - self.mean) / self.sd
 
 
 def model_at(frame, candidate, cfg, batch):
@@ -61,9 +73,22 @@ def model_at(frame, candidate, cfg, batch):
 
     symbols = tuple(candidate["symbols"])
     allowance = Allowance(symbols, batch["decision_ts"])
-    rows = [frame.observations[t] for t in sorted(frame.observations) if t < frame.ts]
-    model = fit_model(rows, symbols, frame.ts, allowance, cfg["window"])
-    used = rows[-cfg["window"] :]
+    rows = [
+        frame.observations[t]
+        for t in sorted(frame.observations)
+        if t < frame.ts and frame.observations[t].available_at <= frame.ts
+    ]
+    # Frame is the actual UTC decision; fit_model uses prior close-labelled observations.
+    model = fit_model(rows, symbols, frame.ts - 1, allowance, cfg["window"])
+    used = [r for r in rows if r.ts < frame.ts - 1][-cfg["window"] :]
+    if cfg["mode"] == "relative_return":
+        used = rows[-84:]
+        if (
+            len(used) != 84
+            or used[-1].ts != frame.ts - 1
+            or any(b.ts - a.ts != DAY for a, b in zip(used, used[1:], strict=False))
+        ):
+            raise Rejected("short_return_training", "83 daily returns (84 lagged prices) required")
     digest = sha(canonical([[r.ts, r.available_at, {s: str(r.prices[s]) for s in symbols}] for r in used]))
     model = ScreenedPriceModel(
         **asdict(model),
@@ -71,15 +96,16 @@ def model_at(frame, candidate, cfg, batch):
             candidate["id"], frame.ts, sha(canonical(batch["plan"])), batch["family_sha256"], digest
         ),
     )
-    beta, intercept, sd = model.beta, model.intercept, model.sd
+    beta, intercept, sd, mean = model.beta, model.intercept, model.sd, 0.0
     if cfg["mode"] == "relative_return":
         values = [logs(r.prices, symbols) for r in used]
         returns = [
             [b - a for a, b in zip(before, after, strict=True)]
             for before, after in zip(values, values[1:], strict=False)
         ]
-        means = [math.fsum(row[i] for row in returns) / len(returns) for i in range(len(symbols))]
-        centered = [[x - mean for x, mean in zip(row, means, strict=True)] for row in returns]
+        training = returns[-56:]
+        means = [math.fsum(row[i] for row in training) / len(training) for i in range(len(symbols))]
+        centered = [[x - mean for x, mean in zip(row, means, strict=True)] for row in training]
         k = len(symbols) - 1
         beta = solve(
             [[math.fsum(row[i + 1] * row[j + 1] for row in centered) for j in range(k)] for i in range(k)],
@@ -87,9 +113,12 @@ def model_at(frame, candidate, cfg, batch):
         )
         intercept = means[0] - math.fsum(b * m for b, m in zip(beta, means[1:], strict=True))
         residuals = [
-            row[0] - math.fsum(b * r for b, r in zip(beta, row[1:], strict=True)) for row in centered
+            row[0] - intercept - math.fsum(b * r for b, r in zip(beta, row[1:], strict=True))
+            for row in returns
         ]
-        sd = math.sqrt(math.fsum(e * e for e in residuals) / (len(residuals) - 1))
+        sums = [math.fsum(residuals[i : i + 28]) for i in range(56)]
+        mean = math.fsum(sums) / 56
+        sd = math.sqrt(math.fsum((e - mean) ** 2 for e in sums) / 55)
         if sd < 1e-10:
             raise Rejected("zero_residual_scale", "No return signal from zero scale")
     return TaggedModel(
@@ -102,6 +131,7 @@ def model_at(frame, candidate, cfg, batch):
         "synthetic_statistical_screen_only",
         batch["family_sha256"],
         digest,
+        mean,
     )
 
 
@@ -126,10 +156,10 @@ class Strategy:
         )
 
     def __call__(self, frame, pool):
-        if frame.ts % DAY != DAY - 1:
+        if frame.ts % DAY != 0:
             return Decision()
         ts, cfg = frame.ts, self.cfg
-        current, previous = frame.observations.get(ts), frame.observations.get(ts - DAY)
+        current, previous = frame.observations.get(ts - 1), frame.observations.get(ts - DAY - 1)
         orders, cancels, exited = [], set(), set()
         for book, state in list(self.active.items()):
             held = {
@@ -151,13 +181,15 @@ class Strategy:
             try:
                 if current is None or previous is None:
                     raise Rejected("missing_observation", "Daily signal data unavailable")
-                z = state["model"].zscore(current.prices, previous.prices)
+                z = state["model"].zscore(current.prices, previous.prices, frame.observations, ts)
             except Rejected:
                 reason = "missing_observation"
             if ts >= self.end_ts:
                 reason = "boundary_purge"
             elif pool["status"] != "eligible" or not set(state["model"].symbols) <= set(pool["members"]):
                 reason = "point_in_time_eligibility_lost"
+            elif self.batch["permits"].get(cfg["id"] + "/" + book, {}).get("status") != "qualified":
+                reason = "statistical_relationship_lost"
             elif reason is None:
                 if abs(z) >= cfg["break_z"]:
                     reason = "relationship_failure"
@@ -175,7 +207,10 @@ class Strategy:
                 state["exiting"] = True
                 exited.add(book)
                 self.event(ts, book, "exit", reason)
-        if ts >= self.end_ts or ts // DAY % cfg["decision_every_days"]:
+        if (
+            ts >= self.end_ts
+            or ts // DAY % cfg["decision_every_days"] != protocol()["decision_calendar"]["epoch_day_mod7"]
+        ):
             return Decision(tuple(orders), frozenset(cancels))
         if current is None or previous is None or pool["status"] != "eligible":
             self.event(ts, "*", "rejected", "unknown_pool_or_current_observation")
@@ -200,7 +235,7 @@ class Strategy:
                 continue
             try:
                 model = model_at(frame, candidate, cfg, self.batch)
-                z = model.zscore(current.prices, previous.prices)
+                z = model.zscore(current.prices, previous.prices, frame.observations, ts)
                 if not cfg["entry_z"] <= abs(z) < cfg["break_z"]:
                     self.event(ts, book, "no_entry", "deviation_outside_entry", z=z)
                     continue

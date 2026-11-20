@@ -12,13 +12,20 @@ from ..execution_audit import append, canonical, read_log, sha
 
 ROOT = Path(__file__).resolve().parent
 REGISTRATION_SHA = "1b85d581f5605714bef3df66b3fd6da1fdf30449dba68e93152d8c3c228303f2"
+DECISIONS_SHA = "fda9dd48671a09cfb82993b3cd177363877bfe54057bfbbcc7eaf5d74d88e94d"
 
 
 def protocol():
     if sha((ROOT / "ACCEPTANCE_R1.json").read_bytes()) != REGISTRATION_SHA:
         raise Rejected("registration_mismatch", "Leader registration must remain byte-identical")
-    p = json.loads((ROOT / "PROTOCOL_R1.json").read_text())
-    if p["registration_sha256"] != REGISTRATION_SHA or len(p["configs"]) != 6:
+    if sha((ROOT / "DECISIONS_R2.json").read_bytes()) != DECISIONS_SHA:
+        raise Rejected("decisions_mismatch", "R2 decisions must remain byte-identical")
+    p = json.loads((ROOT / "PROTOCOL_R2.json").read_text())
+    if (
+        p["registration_sha256"] != REGISTRATION_SHA
+        or p["decisions_sha256"] != DECISIONS_SHA
+        or len(p["configs"]) != 6
+    ):
         raise Rejected("protocol_mismatch", "Exactly six registered configurations required")
     return p
 
@@ -38,6 +45,11 @@ def real_preflight(artifacts=None):
         "test_integrity": "unverified",
         "quarantine": ["2026-08-14", "2026-10-31"],
         "registration_sha256": REGISTRATION_SHA,
+        "decisions_sha256": DECISIONS_SHA,
+        "real_candidate_registry": None,
+        "exact_eligible_test_dates": None,
+        "quarantine_calendar_days": 79,
+        "new_probe_complete_days": 73,
     }
 
 
@@ -76,7 +88,8 @@ def select_validation(rows):
     choices = [k for k in ids if good(k)]
     if not choices:
         raise Rejected("no_qualified_validation_configuration", "Keep all failures")
-    return sorted(choices, key=lambda k: (-rows[k]["net_sharpe"], rows[k]["turnover"], k != "primary", k))[0]
+    order = {c["id"]: i for i, c in enumerate(protocol()["configs"])}
+    return sorted(choices, key=lambda k: (-rows[k]["net_sharpe"], rows[k]["turnover"], order[k]))[0]
 
 
 class Journal:
@@ -92,6 +105,7 @@ class Journal:
                 "event": "experiment",
                 "at_utc": datetime.now(UTC).isoformat(),
                 "registration_sha256": REGISTRATION_SHA,
+                "decisions_sha256": DECISIONS_SHA,
                 "HEAD": subprocess.check_output(
                     ["git", "rev-parse", "HEAD"], cwd=ROOT.parents[1], text=True
                 ).strip(),
@@ -99,7 +113,7 @@ class Journal:
             },
         )
 
-    def reserve(self, config, stage, binding, *, origin):
+    def reserve(self, config, stage, binding, *, origin, retry=False):
         if origin != "synthetic_test":
             raise Rejected("real_execution_disabled", "Local synthetic journal is not real authorization")
         if config not in {c["id"] for c in protocol()["configs"]} or stage not in {
@@ -128,15 +142,32 @@ class Journal:
                     )
             if stage == "confirmation" and any(e["stage"] == "confirmation" for e in reservations):
                 raise Rejected("test_already_consumed", "Failure does not restore the one confirmation slot")
-            if any(e["config"] == config and e["stage"] == stage for e in reservations):
-                raise Rejected(
-                    "experiment_already_reserved", "Use exact frozen result verification, not a new run"
+            previous = [e for e in reservations if e["config"] == config and e["stage"] == stage]
+            retry_of = None
+            if previous:
+                last = previous[-1]
+                failed = any(
+                    e.get("action") == "result"
+                    and e.get("token") == last["token"]
+                    and e.get("status") == "failed"
+                    for e in entries
                 )
+                if not retry or stage != "training_validation" or last["binding"] != binding or not failed:
+                    raise Rejected(
+                        "experiment_already_reserved", "Only an unchanged failed training attempt can retry"
+                    )
+                retry_of = last["token"]
             if len({e["config"] for e in reservations} | {config}) > 6:
                 raise Rejected("experiment_budget_exhausted", "Six configurations maximum")
             token = sha(canonical([config, stage, binding, len(entries)]))
             self.record(
-                action="reserve", token=token, config=config, stage=stage, origin=origin, binding=binding
+                action="reserve",
+                token=token,
+                config=config,
+                stage=stage,
+                origin=origin,
+                binding=binding,
+                retry_of=retry_of,
             )
             return token
 
