@@ -15,13 +15,40 @@ jobs:
           python-version: ${{ matrix.python }}
           enable-cache: true
       - run: uv sync --frozen --group dev
-      - run: uv pip install --python .venv/bin/python --require-hashes -r research/statistics/requirements.lock
-      - run: uv run --no-sync ruff check .
-      - run: uv run --no-sync ruff format --check .
-      - run: uv run --no-sync python -m research.synthetic_guard pytest -q
-      - run: uv run --no-sync python -m research.m3 verify
-      - run: uv run --no-sync python -m research.statistics verify
+      - run: uv run --no-sync ruff check . --extend-exclude 'research,tests/test_research*.py'
+      - run: uv run --no-sync ruff format --check . --extend-exclude 'research,tests/test_research*.py'
+      - run: uv run --no-sync python -m research.synthetic_guard pytest -q tests --ignore-glob='*test_research*.py'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - run: node --check okx_workbench/static/app.js
+  research:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.11', '3.14']
+    env:
+      OPENBLAS_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - run: uv sync --frozen --group dev
+      - run: uv pip install --python .venv/bin/python --require-hashes -r research/statistics/requirements.lock
+      - run: |
+          paths=(research/experiments/{acceptance,acceptance_fixture,benchmarks,episodes,evaluation_inputs,runner}.py tests/test_research_acceptance_r3.py)
+          uv run --no-sync ruff check "${paths[@]}"
+          uv run --no-sync ruff format --check "${paths[@]}"
+      - run: uv run --no-sync python -m research.synthetic_guard pytest -q tests/test_research*.py --ignore=tests/test_research_r2.py
+      - run: uv run --no-sync python -m research.m3 verify
+      - run: uv run --no-sync python -m research.statistics verify
+      - run: uv run --no-sync python -m research.experiments synthetic --output research/runtime/ci-wiring
+      - run: uv run --no-sync python -m research.experiments acceptance-synthetic --output research/runtime/ci-acceptance
+      - name: Confirm real input is refused
+        run: |
+          code=0
+          uv run --no-sync python -m research.experiments real || code=$?
+          test "$code" -eq 2

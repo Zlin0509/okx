@@ -23,7 +23,7 @@ from .strategy import Strategy
 from .universe import candidate_family, pool_at
 
 ROOT = Path(__file__).resolve().parents[2]
-FREEZE = Path(__file__).with_name("SOURCE_FREEZE_R2_V2.json")
+FREEZE = Path(__file__).with_name("SOURCE_FREEZE_R3.json")
 
 
 class ExperimentEngine(CausalEngine):
@@ -268,14 +268,19 @@ def run_configuration(cfg, batch, inputs, scenario):
     )
 
 
-def synthetic(output):
-    from ..statistics.fixtures import asof
-
-    p = protocol()
+def verify_source():
     source = FREEZE.read_bytes()
     for path, value in json.loads(source)["sha256"].items():
         if sha((ROOT / path).read_bytes()) != value:
             raise Rejected("freeze_mismatch", path)
+    return source
+
+
+def synthetic(output):
+    from ..statistics.fixtures import asof
+
+    p = protocol()
+    source = verify_source()
     output = Path(output)
     if output.exists():
         raise Rejected("frozen_directory_exists", "Keep all experiments and failed evidence")
@@ -374,7 +379,7 @@ def synthetic(output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("synthetic", "preflight", "real"))
+    parser.add_argument("action", choices=("synthetic", "acceptance-synthetic", "preflight", "real"))
     parser.add_argument("--output", default="research/runtime/experiments_r2")
     args = parser.parse_args()
     counts = install()
@@ -395,7 +400,15 @@ def main():
 
     append(journal, {**common, "event": "start", "at_utc": datetime.now(UTC).isoformat()})
     try:
-        result = synthetic(args.output) if args.action == "synthetic" else real_preflight()
+        if args.action == "synthetic":
+            result = synthetic(args.output)
+        elif args.action == "acceptance-synthetic":
+            from .acceptance_fixture import write_exercise
+
+            verify_source()
+            result = write_exercise(args.output)
+        else:
+            result = real_preflight()
         result["guard_counts"] = dict(counts)
         result["private_input_guard"] = dict(private_counts)
         result["guard_scope"] = GUARD_SCOPE
