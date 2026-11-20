@@ -1,0 +1,27 @@
+name: Intervals report offline tests
+
+on:
+  push:
+    paths:
+      - 'intervals-report/**'
+      - '.github/workflows/intervals-report.yml'
+  pull_request:
+    paths:
+      - 'intervals-report/**'
+      - '.github/workflows/intervals-report.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python3 -m unittest discover -s intervals-report/tests -v
