@@ -166,6 +166,27 @@ def main():
     else:
         parser.error("Choose --app or --source")
     verify(command, root, args.report.resolve())
+    if args.app:
+        check_command = [
+            str(args.app.resolve() / "Contents/Resources/server/OKXServer"),
+            "--self-check-offline",
+        ]
+    else:
+        check_command = [
+            str(args.source.resolve() / ".venv/bin/python"),
+            str(args.source.resolve() / "packaging/macos/server.py"),
+            "--self-check-offline",
+        ]
+    result = subprocess.run(check_command, capture_output=True, text=True, timeout=30, check=True)
+    fresh = json.loads(result.stdout.strip().splitlines()[-1])
+    assert fresh["first_action"] == "submitted" and fresh["second_action"] == "duplicate"
+    assert fresh["orders"] == 1 and float(fresh["filled"]) > 0 and fresh["strategy_paused"]
+    path = args.report.resolve()
+    report = json.loads(path.read_text())
+    report["strict_fresh_signal"] = fresh
+    report["checks"].append({"name": "fresh_signal_filled_exactly_one_order_then_duplicate", "passed": True})
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    print(json.dumps({"strict_fresh_signal": fresh, "total_checks": len(report["checks"])}))
 
 
 if __name__ == "__main__":

@@ -280,7 +280,7 @@ def test_legacy_scope_migration_preserves_audit_and_blocks_old_signals(setup_eng
     "bar,age,submitted",
     [
         (b, a, ok)
-        for b in ("1H", "4H", "1D")
+        for b in ("1m", "1H", "4H", "1D")
         for a, ok in [(0, True), (300, True), (301, False), (23 * 3600, False), (-1, False)]
     ],
 )
@@ -300,6 +300,34 @@ def test_five_minute_signal_window_all_timeframes(setup_engine, monkeypatch, bar
     assert bool(exchange.submissions) == submitted
     if not submitted:
         assert result["action"] == "expired"
+
+
+@pytest.mark.parametrize("age_ms,submitted", [(299999, True), (300000, True), (300001, False)])
+def test_minute_signal_deadline_millisecond_boundary(setup_engine, monkeypatch, age_ms, submitted):
+    engine, store, exchange, sid = setup_engine
+    end = int(time.time() * 1000) // 60000 * 60000
+    candles = [
+        Candle(end - (200 - i) * 60000, 60000 + i, 60020 + i, 59990 + i, 60001 + i) for i in range(200)
+    ]
+    monkeypatch.setattr(exchange, "candles", lambda *args: candles)
+    with store.connect() as db:
+        db.execute(
+            "UPDATE strategies SET spec=? WHERE id=?",
+            (json.dumps(StrategySpec(bar="1m").model_dump()), sid),
+        )
+    monkeypatch.setattr(engine, "now_ms", lambda: end + age_ms)
+    result = engine.execute(sid)
+    assert result["signal"]["close_ts_ms"] == end
+    assert result["signal"]["deadline_ms"] == end + 300000
+    assert result["signal"]["executable"] == submitted
+    assert len(exchange.submissions) == (1 if submitted else 0)
+    if submitted:
+        assert result["action"] == "submitted"
+        assert engine.execute(sid)["action"] == "duplicate"
+        assert len(exchange.submissions) == 1
+    else:
+        assert result["action"] == "expired"
+        assert not store.orders(engine.scope)
 
 
 def test_backtest_and_generation_use_execution_limits_and_default_slippage(setup_engine):

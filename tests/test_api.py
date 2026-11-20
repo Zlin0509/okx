@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from okx_workbench.app import create_app
 from okx_workbench.config import Settings
+from okx_workbench.market import OKX
 
 
 def test_full_offline_workflow_and_restart(tmp_path):
@@ -80,3 +81,26 @@ def test_input_security_and_no_secrets(tmp_path):
         assert settings.api_key not in state.text and settings.secret not in state.text
         assert settings.passphrase not in state.text
         assert "frame-ancestors 'none'" in state.headers["content-security-policy"]
+
+
+def test_minute_market_generation_and_backtest_stay_paused(tmp_path, monkeypatch):
+    def deny_network(*args, **kwargs):
+        raise AssertionError("Offline minute workflow must not request the exchange")
+
+    monkeypatch.setattr(OKX, "request", deny_network)
+    settings = Settings(database=str(tmp_path / "minute.sqlite3"))
+    with TestClient(create_app(settings)) as client:
+        candles = client.get("/api/market", params={"bar": "1m"}).json()["candles"]
+        assert candles[-1]["ts"] - candles[-2]["ts"] == 60000
+        response = client.post("/api/strategies/generate", json={"bar": "1m"})
+        assert response.status_code == 200
+        generated = response.json()
+        assert generated["spec"]["bar"] == "1m"
+        assert generated["validation"]["snapshot"]["bar"] == "1m"
+        state = client.get("/api/state").json()
+        assert state["strategies"][0]["spec"]["bar"] == "1m"
+        assert not state["strategies"][0]["active"] and not state["orders"]
+        result = client.post("/api/backtests", json=generated["spec"]).json()
+        assert result["snapshot"]["bar"] == "1m"
+        csv = client.get(f"/api/backtests/{result['id']}/export.csv")
+        assert csv.status_code == 200 and ",1m," in csv.text
