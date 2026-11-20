@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..engine import Rejected
 from ..execution_audit import append, canonical
+from ..frozen_sources import verify_historical_sources
 from ..synthetic_guard import GUARD_SCOPE, install
 from .core import dependencies, digest, evaluate_family, qualified_models
 from .disclosure import check_documents
@@ -120,9 +121,7 @@ def legacy_projection(result):
 def verify_sources():
     for name in ("M3B_PREREGISTRATION.json", FREEZE.name):
         spec = json.loads((ROOT / "research" / name).read_text(encoding="utf-8"))
-        for path, expected in spec["sha256"].items():
-            if sha((ROOT / path).read_bytes()) != expected:
-                raise Rejected("freeze_mismatch", path)
+        verify_historical_sources(ROOT, spec["sha256"])
 
 
 def perform(action):

@@ -1,0 +1,22 @@
+{
+  ".github/workflows/test.yml": {
+    "archive": "research/legacy_ci_sources/workflow.yml.txt",
+    "sha256": "fa7c8b566a4f37b5a3541203d8ba3b13b2bb8b2bdc9bcebc8db6ac42fafb32c4"
+  },
+  "research/fee_scenarios.py": {
+    "archive": "research/legacy_ci_sources/fee_scenarios.py.txt",
+    "sha256": "4b82b348fbf147e95d271348d90a2ac420301b2f5f84192b055e5252633eb57e"
+  },
+  "research/m3.py": {
+    "archive": "research/legacy_ci_sources/m3.py.txt",
+    "sha256": "7bdf01ebdd41a4db51011bdaaba9936d1d72b163085c433b494aaa08b8478f35"
+  },
+  "research/statistics/runner.py": {
+    "archive": "research/legacy_ci_sources/statistics_runner.py.txt",
+    "sha256": "bc0359add42f0580d004513e541f155158adbd87a40b76d63a97ef7f74205085"
+  },
+  "research/ws_replay.py": {
+    "archive": "research/legacy_ci_sources/ws_replay.py.txt",
+    "sha256": "53f0dc8edcc6fb9ec2718e210c7998b25b5b98b99fd14f83121b1cfde0b922f8"
+  }
+}

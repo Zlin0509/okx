@@ -23,7 +23,7 @@ from .strategy import Strategy
 from .universe import candidate_family, pool_at
 
 ROOT = Path(__file__).resolve().parents[2]
-FREEZE = Path(__file__).with_name("SOURCE_FREEZE_R3.json")
+FREEZE = Path(__file__).with_name("SOURCE_FREEZE_R3_V2.json")
 
 
 class ExperimentEngine(CausalEngine):

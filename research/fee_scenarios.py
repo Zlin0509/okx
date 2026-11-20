@@ -14,6 +14,7 @@ from pathlib import Path
 from . import m3
 from .engine import BPS, ZERO, Rejected, number, serializable, sign
 from .execution_audit import append, canonical, sha
+from .frozen_sources import verify_historical_sources
 from .synthetic_guard import GUARD_SCOPE, install
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -368,9 +369,7 @@ def render():
 
 def perform(action):
     spec = json.loads(FREEZE.read_text())
-    for path, expected in spec["sha256"].items():
-        if sha((ROOT / path).read_bytes()) != expected:
-            raise Rejected("freeze_mismatch", path)
+    verify_historical_sources(ROOT, spec["sha256"])
     output = render()
     manifest = {
         name: {"bytes": len(body.encode()), "sha256": sha(body.encode())} for name, body in output.items()

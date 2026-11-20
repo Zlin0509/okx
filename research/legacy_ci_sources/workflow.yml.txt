@@ -1,0 +1,27 @@
+name: checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.11', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - run: uv sync --frozen --group dev
+      - run: uv pip install --python .venv/bin/python --require-hashes -r research/statistics/requirements.lock
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync python -m research.synthetic_guard pytest -q
+      - run: uv run --no-sync python -m research.m3 verify
+      - run: uv run --no-sync python -m research.statistics verify
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check okx_workbench/static/app.js

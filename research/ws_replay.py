@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .engine import Rejected, number
 from .execution_audit import append, canonical, sha
+from .frozen_sources import verify_historical_sources
 from .synthetic_guard import GUARD_SCOPE, install
 from .ws_package import read_capture
 from .ws_view import MarketView, readonly
@@ -364,9 +365,7 @@ def render(raw, spec, verification):
 
 
 def perform(capture, output=None):
-    for path, expected in json.loads(FREEZE.read_text())["sha256"].items():
-        if sha((ROOT / path).read_bytes()) != expected:
-            raise Rejected("freeze_mismatch", path)
+    verify_historical_sources(ROOT, json.loads(FREEZE.read_text())["sha256"])
     raw, verified = read_capture(capture, json.loads(SOURCE.read_text()))
     spec = json.loads(PROTOCOL.read_text())
     out = render(raw, spec, verified)

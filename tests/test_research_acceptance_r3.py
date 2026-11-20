@@ -299,3 +299,31 @@ class JointTests(TestCase):
         ):
             self.assertFalse(result["gates"][gate])
         self.assertFalse(result["synthetic_numerical_gates_passed"])
+
+
+def test_ci_migration_checks_legacy_archive_and_active_file(tmp_path):
+    import json
+    from pathlib import Path
+
+    import pytest
+
+    from research.engine import Rejected
+    from research.frozen_sources import LIVE_FREEZE, ORIGINALS, verify_historical_sources
+
+    checkout = Path(__file__).resolve().parents[1]
+    migration = json.loads((checkout / ORIGINALS).read_text())
+    workflow = ".github/workflows/test.yml"
+    original = migration[workflow]
+    paths = (LIVE_FREEZE, ORIGINALS, "research/frozen_sources.py", workflow, original["archive"])
+    for name in paths:
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_bytes((checkout / name).read_bytes())
+
+    expected = {workflow: original["sha256"]}
+    verify_historical_sources(tmp_path, expected)
+    for name in (workflow, original["archive"]):
+        (tmp_path / name).write_text("changed")
+        with pytest.raises(Rejected, match="Frozen source changed") as error:
+            verify_historical_sources(tmp_path, expected)
+        assert error.value.code == "freeze_mismatch"
+        (tmp_path / name).write_bytes((checkout / name).read_bytes())
