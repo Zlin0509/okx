@@ -38,7 +38,15 @@ jobs:
           enable-cache: true
       - run: uv sync --frozen --group dev
       - run: uv pip install --python .venv/bin/python --require-hashes -r research/statistics/requirements.lock
-      - run: uv run --no-sync python -m research.synthetic_guard pytest -q tests/test_research*.py --ignore=tests/test_research_r2.py
+      - name: Run offline research tests
+        run: |
+          research_tests=()
+          for test_file in tests/test_research*.py; do
+            if [[ "$test_file" != tests/test_research_r2.py ]]; then
+              research_tests+=("$test_file")
+            fi
+          done
+          uv run --no-sync python -m research.synthetic_guard pytest -q "${research_tests[@]}"
       - run: uv run --no-sync python -m research.m3 verify
       - run: uv run --no-sync python -m research.statistics verify
       - run: uv run --no-sync python -m research.experiments synthetic --output research/runtime/ci-wiring
