@@ -139,18 +139,33 @@ class Journal:
     def finish(self, token, result, status):
         if status not in {"passed", "failed", "refused"}:
             raise Rejected("invalid_status", "Retain failures and refusals")
-        entries = read_log(self.path)
-        if not any(e.get("action") == "reserve" and e.get("token") == token for e in entries) or any(
-            e.get("action") == "result" and e.get("token") == token for e in entries
-        ):
-            raise Rejected("invalid_experiment_token", "One finish per recorded reservation")
-        self.record(
-            action="result", token=token, status=status, result=result, result_sha256=sha(canonical(result))
-        )
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            entries = read_log(self.path)
+            if not any(e.get("action") == "reserve" and e.get("token") == token for e in entries) or any(
+                e.get("action") == "result" and e.get("token") == token for e in entries
+            ):
+                raise Rejected("invalid_experiment_token", "One finish per recorded reservation")
+            self.record(
+                action="result",
+                token=token,
+                status=status,
+                result=result,
+                result_sha256=sha(canonical(result)),
+            )
 
     def select(self, rows):
         config = select_validation(rows)
-        self.record(
-            action="selection", config=config, validation_sha256=sha(canonical(rows)), origin="synthetic_test"
-        )
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if any(e.get("stage") == "confirmation" for e in read_log(self.path)):
+                raise Rejected("test_already_consumed", "No selection changes after test reservation")
+            self.record(
+                action="selection",
+                config=config,
+                validation_sha256=sha(canonical(rows)),
+                origin="synthetic_test",
+            )
         return config

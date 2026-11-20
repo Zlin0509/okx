@@ -22,7 +22,7 @@ from .strategy import Strategy
 from .universe import candidate_family, pool_at
 
 ROOT = Path(__file__).resolve().parents[2]
-FREEZE = Path(__file__).with_name("SOURCE_FREEZE_R1.json")
+FREEZE = Path(__file__).with_name("SOURCE_FREEZE_R1_V2.json")
 
 
 class ExperimentEngine(CausalEngine):
@@ -137,7 +137,30 @@ def validate_adapter(market, *, funding_kind, origin):
 
 
 def run_configuration(cfg, batch, inputs, scenario):
+    from ..statistics.core import Candidate, FamilyPlan, window_data
+    from ..statistics.fixtures import asof
+
     market, observations, metadata, turnover = inputs
+    p = protocol()
+    if cfg not in p["configs"] or batch["config_ids"] != [c["id"] for c in p["configs"]]:
+        raise Rejected("unregistered_experiment", "Exact six configuration definitions required")
+    screen_view = asof(observations, batch["decision_ts"] // DAY)
+    pool = pool_at(screen_view.ts, metadata, turnover, screen_view.observations, universe_verified=True)
+    if (
+        pool["status"] != "eligible"
+        or candidate_family(pool["members"], p["synthetic"]["core_anchors"]) != batch["family"]
+    ):
+        raise Rejected("pool_family_mismatch", "Statistical family must match the as-of admitted universe")
+    plan = FamilyPlan(
+        "experiment_R1_frozen_pool", tuple(Candidate(c["id"], tuple(c["symbols"])) for c in batch["family"])
+    )
+    for candidate in plan.candidates:
+        _, sample = window_data(screen_view, candidate, plan)
+        if (
+            candidate.id in batch["analyses"]
+            and sample["training_sha256"] != batch["analyses"][candidate.id]["training_sha256"]
+        ):
+            raise Rejected("training_mismatch", "Every candidate binds the actual historical observations")
     validate_adapter(market, funding_kind="synthetic_settlement", origin="synthetic_test")
     strategy = Strategy(cfg, batch, protocol()["synthetic"]["end_day_exclusive"] * DAY - 1)
     pools = []
@@ -295,6 +318,9 @@ def main():
     parser.add_argument("--output", default="research/runtime/experiments_r1")
     args = parser.parse_args()
     counts = install()
+    from .input_guard import install as install_input_guard
+
+    private_counts = install_input_guard(ROOT)
     journal = ROOT / "research/runtime/experiment_attempts.jsonl"
     run_id = str(uuid.uuid4())
     common = {
@@ -311,8 +337,9 @@ def main():
     try:
         result = synthetic(args.output) if args.action == "synthetic" else real_preflight()
         result["guard_counts"] = dict(counts)
+        result["private_input_guard"] = dict(private_counts)
         result["guard_scope"] = GUARD_SCOPE
-        if any(counts.values()):
+        if any(counts.values()) or any(private_counts.values()):
             raise PermissionError("unexpected_cache_or_network_access")
         status = "refused" if result["status"] == "refused" else "passed"
     except Exception as exc:
@@ -320,6 +347,7 @@ def main():
             "status": "failed",
             "reason": getattr(exc, "code", type(exc).__name__),
             "guard_counts": dict(counts),
+            "private_input_guard": dict(private_counts),
         }
         status = "failed"
     append(

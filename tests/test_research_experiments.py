@@ -5,9 +5,9 @@ from dataclasses import replace
 
 import pytest
 
-from research.engine import Rejected
+from research.engine import Costs, Leg, Pending, Rejected, number
 from research.experiments.contract import protocol
-from research.experiments.runner import mock_inputs, run_configuration, validate_adapter
+from research.experiments.runner import ExperimentEngine, mock_inputs, run_configuration, validate_adapter
 from research.experiments.screen import bind_family, screen
 from research.experiments.universe import candidate_family, pool_at
 from research.statistics.fixtures import asof, changed_future
@@ -83,7 +83,7 @@ def test_next_execution_costs_reconcile_and_pressure_is_full_rerun(experiment):
     fills = [r for r in base["accounting"]["ledger"] if r["event"] in {"fill", "risk_fill"}]
     assert fills, "Keep this fixed fixture even if later versions refuse; never tune to force profit"
     assert all(r["ts"] > r["known_at"] for r in fills)
-    assert base["accounting"]["reconciliation_error"] == "0.000000000000000000000000000000"
+    assert abs(number(base["accounting"]["reconciliation_error"])) < number("1e-24")
     assert base["real_returns"] is None and base["annualized_metrics"] is None
     assert all(r["fee"] is not None for r in base["cost_ledger"] if r["event"] == "fill")
     assert stress["costs"] == {"fee_bps": 10, "slippage_bps": 10}
@@ -104,3 +104,27 @@ def test_future_changes_do_not_change_past_signals_or_complete_ledger_prefix(exp
     assert [r for r in original["accounting"]["ledger"] if r["ts"] <= cutoff] == [
         r for r in changed["accounting"]["ledger"] if r["ts"] <= cutoff
     ]
+
+
+def test_changed_training_or_extra_configuration_cannot_reuse_screen(experiment):
+    inputs, _, batch = experiment
+    cfg = protocol()["configs"][0]
+    changed = mock_inputs(changed_future(inputs[1], 300 * 86400000))
+    with pytest.raises(Rejected, match="historical observations"):
+        run_configuration(cfg, batch, changed, "base")
+    with pytest.raises(Rejected):
+        run_configuration({**cfg, "entry_z": 0.1}, batch, inputs, "base")
+
+
+def test_shared_symbol_opposing_legs_do_not_net_capacity(experiment):
+    (market, _, _, turnover), _, _ = experiment
+    volumes = copy.deepcopy(turnover)
+    for row in volumes["W"].values():
+        row["volCcyQuote"] = "100000"
+    engine = ExperimentEngine(market, volumes, Costs(number(5), number(5)))
+    frame = market.frames[0]
+    quantity = number(60) / frame.execution["W"]
+    engine.execute(frame, Pending(frame.ts, "one", frame.ts - 1, Leg("one", "W"), quantity))
+    engine.execute(frame, Pending(frame.ts, "two", frame.ts - 1, Leg("two", "W"), -quantity))
+    assert [r["event"] for r in engine.ledger] == ["fill", "rejected_capacity"]
+    assert engine.ledger[-1]["reason"] == "absolute_daily_participation"

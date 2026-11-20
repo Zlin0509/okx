@@ -57,12 +57,20 @@ class TaggedModel:
 
 
 def model_at(frame, candidate, cfg, batch):
+    from ..statistics.core import ModelProvenance, ScreenedPriceModel
+
     symbols = tuple(candidate["symbols"])
     allowance = Allowance(symbols, batch["decision_ts"])
     rows = [frame.observations[t] for t in sorted(frame.observations) if t < frame.ts]
     model = fit_model(rows, symbols, frame.ts, allowance, cfg["window"])
     used = rows[-cfg["window"] :]
     digest = sha(canonical([[r.ts, r.available_at, {s: str(r.prices[s]) for s in symbols}] for r in used]))
+    model = ScreenedPriceModel(
+        **asdict(model),
+        provenance=ModelProvenance(
+            candidate["id"], frame.ts, sha(canonical(batch["plan"])), batch["family_sha256"], digest
+        ),
+    )
     beta, intercept, sd = model.beta, model.intercept, model.sd
     if cfg["mode"] == "relative_return":
         values = [logs(r.prices, symbols) for r in used]
