@@ -23,7 +23,7 @@ from .strategy import Strategy
 from .universe import candidate_family, pool_at
 
 ROOT = Path(__file__).resolve().parents[2]
-FREEZE = Path(__file__).with_name("SOURCE_FREEZE_R2.json")
+FREEZE = Path(__file__).with_name("SOURCE_FREEZE_R2_V2.json")
 
 
 class ExperimentEngine(CausalEngine):
@@ -34,10 +34,12 @@ class ExperimentEngine(CausalEngine):
 
     def execute(self, frame, order):
         symbol = order.leg.symbol
-        # Availability is measured at execution. Only the preceding 30 complete UTC days count.
-        close = (frame.ts // DAY - 1) * DAY + DAY - 1
+        # Capacity denominator is frozen at signal decision, not updated with the intervening day's volume.
+        close = (order.known_at // DAY - 1) * DAY + DAY - 1
         values = [self.turnover.get(symbol, {}).get(close - lag * DAY) for lag in range(30)]
-        if any(v is None or v["available_at"] > frame.ts or str(v.get("confirm")) != "1" for v in values):
+        if any(
+            v is None or v["available_at"] > order.known_at or str(v.get("confirm")) != "1" for v in values
+        ):
             self.record(
                 frame,
                 "rejected_capacity",

@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from research.decision_view import Decision
-from research.engine import Costs, Leg, Rejected, Signal, number
+from research.engine import Costs, Leg, Pending, Rejected, Signal, number
 from research.experiments.contract import protocol
 from research.experiments.registry import build_registry
 from research.experiments.runner import ExperimentEngine, mock_inputs
@@ -97,3 +97,20 @@ def test_secondary_missing_or_future_available_endpoint_refuses(r2):
         del rows[t]
     with pytest.raises(Rejected):
         model_at(replace(frame, observations=rows), candidate, protocol()["configs"][-1], batch)
+
+
+def test_capacity_does_not_use_volume_observed_between_decision_and_fill(r2):
+    (market, _, _, turnover), registry, _ = r2
+    monday = registry[0]["decision_ts"]
+    frame = next(f for f in market.frames if f.ts == monday + DAY)
+    volume = copy.deepcopy(turnover)
+    for row in volume["W"].values():
+        row["volCcyQuote"] = "100000"
+    volume["W"][monday + DAY - 1]["volCcyQuote"] = "999999999999"
+    engine = ExperimentEngine(market, volume, Costs(number(5), number(5)))
+    engine.execute(
+        frame,
+        Pending(frame.ts, "MOCK_capacity_asof", monday, Leg("mock", "W"), number(150) / frame.execution["W"]),
+    )
+    assert [r["event"] for r in engine.ledger] == ["rejected_capacity"]
+    assert engine.ledger[-1]["limit"] == number(100)
