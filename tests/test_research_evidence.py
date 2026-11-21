@@ -249,3 +249,9 @@ def test_reserve_requires_original_window_disposition_and_completed_dates():
             Findings(),
             DATES,
         )
+
+
+def test_upstream_report_source_freeze_still_verifies():
+    from research.reporting.report import verify_reporting_source
+
+    assert verify_reporting_source() == "ca894d5434ff37a63b6e415b0f666667d8ee94ba38c29aa0f66839d8e4cb0400"

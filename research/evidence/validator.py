@@ -89,7 +89,7 @@ def approval(body, root, as_of, src):
 
 
 def _verify_validator_sources():
-    body = Path(__file__).with_name("EVIDENCE_SOURCE_FREEZE_V1.json").read_bytes()
+    body = Path(__file__).with_name("EVIDENCE_SOURCE_FREEZE_V2.json").read_bytes()
     for path, digest in json.loads(body)["sha256"].items():
         check(sha((ROOT / path).read_bytes()) == digest, "validator_source_hash_mismatch", path)
     return sha(body)

@@ -37,7 +37,3 @@ python3 -m research.experiments acceptance-synthetic --output ./acceptance_mock
 ### 冻结账本的中文报告
 
 现货基准、六配置成本敏感性、Sortino、完整月胜率、换手、相关性与回撤归因可用一条离线命令生成。输入及命令见[报告复现说明](reporting/DESIGN.md)。
-
-### 回测前离线证据校验
-
-独立校验入口输出九类材料的缺项、哈希、时间、跨日期与结算配对诊断。规范及合成复现见[数据证据核验说明](evidence/DESIGN.md)。
