@@ -37,6 +37,8 @@ function disconnected(note = "服务连接中断；执行状态待同步") {
   $("connection-notice").textContent =
     `${note}。最后同步：${lastSync ? date(lastSync) : "尚未成功"}。金额显示已清空；暂停入口仍可用。`;
   $("connection-notice").classList.add("warning");
+  $("history-status").textContent = "本地服务连接中断，等待确认采集状态。";
+  $("subscribe-market").disabled = $("unsubscribe-market").disabled = true;
   $("execution-state").textContent = confirmedPause
     ? "暂停已确认 / 待同步"
     : "状态待同步";
@@ -86,7 +88,9 @@ const date = (x) =>
 const sourceName = () =>
   state?.source === "offline"
     ? "离线演练"
-    : state?.mode === "live"
+    : state?.history && !state?.credentials_ready
+      ? "OKX 公共行情研究"
+      : state?.mode === "live"
       ? "OKX 实盘"
       : "OKX 模拟盘";
 function notify(message, error = false) {
@@ -191,26 +195,61 @@ function chart(id, points, key, baseline) {
   // Only validated numeric series and fixed date formatting enter SVG markup.
   container.innerHTML = `<svg viewBox="0 0 ${w} ${h}" aria-hidden="true">${grids}<path class="area" d="${line} L${x(points.length - 1)},${h - bottom} L${left},${h - bottom} Z"/>${base}<path class="line" d="${line}"/>${labels}</svg>`;
 }
+let marketGeneration = 0;
 async function loadMarket() {
-  const data = await api(
-    `/market?symbol=${encodeURIComponent($("symbol").value)}&bar=${encodeURIComponent($("bar").value)}`,
-  );
+  const generation = ++marketGeneration;
+  const symbol = $("symbol").value, bar = $("bar").value;
+  let data;
+  try {
+    data = await api(`/market?symbol=${encodeURIComponent(symbol)}&bar=${encodeURIComponent(bar)}`);
+  } catch (e) {
+    if (generation !== marketGeneration) return;
+    marketData = [];
+    $("last-price").textContent = "—";
+    $("market-source").textContent = "行情读取失败";
+    $("market-range").textContent = e.message;
+    chart("market-chart", marketData, "close");
+    return;
+  }
+  if (generation !== marketGeneration) return;
   marketData = data.candles;
-  $("market-heading").textContent = $("symbol").value.replace(
-    "-USDT-SWAP",
-    " / USDT 永续",
-  );
-  $("last-price").textContent = fmt(marketData.at(-1).close);
-  $("market-source").textContent =
-    data.source === "offline" ? "合成行情 · 非真实价格" : "OKX 已完成 K 线";
-  $("market-range").textContent =
-    `${date(marketData[0].ts)} — ${date(marketData.at(-1).ts)}`;
+  const last = marketData.at(-1);
+  $("market-heading").textContent = symbol.replace("-USDT-SWAP", " / USDT 永续");
+  $("last-price").textContent = last ? fmt(last.close) : "—";
+  $("market-source").textContent = data.source === "offline" ? "合成行情 · 非真实价格"
+    : data.source === "okx_public" ? `OKX 公共缓存 · ${last && !last.confirmed ? "最新一根尚未收盘" : "已确认历史"}`
+    : "OKX 已完成 K 线";
+  $("market-range").textContent = last
+    ? `${date(marketData[0].ts)} — ${date(last.ts)}`
+    : "当前合约与周期暂无缓存，可添加采集并等待回补";
   chart("market-chart", marketData, "close");
+}
+
+function renderHistory(history) {
+  const enabled = Boolean(history);
+  $("subscribe-market").disabled = $("unsubscribe-market").disabled = !enabled;
+  if (!enabled) {
+    $("history-status").textContent = "采集未启用。默认限额为每组 10,000 根、365 天、全局 64 MiB 和 4 组订阅。";
+    return;
+  }
+  const labels = {collecting: "采集中", backfilling: "回补中", waiting: "等待首轮", stale: "行情滞后", disconnected: "断连或采集受阻"};
+  const usage = `每组最多 ${history.max_rows} 根、${history.retention_days} 天。磁盘 ${(history.disk_bytes / 1048576).toFixed(2)} / ${history.budget_bytes / 1048576} MiB，订阅 ${history.subscriptions.length} / ${history.max_pairs} 组。`;
+  const subscriptions = history.subscriptions.map((s) => {
+    const time = s.latest_close_ms ? `收盘 ${date(s.latest_close_ms)}，距收盘 ${Math.round(s.delay_seconds)} 秒` : "暂无已确认数据";
+    const sync = s.updated_ms ? ` · 最近采集 ${date(s.updated_ms)}` : "";
+    return `${s.symbol} ${s.bar} · ${labels[s.state] ?? "待同步"} · ${s.confirmed_count} 根连续确认 · ${time}${sync}${s.detail ? " · " + s.detail : ""}`;
+  });
+  $("history-status").textContent = [usage, ...subscriptions].join(" ");
 }
 async function loadAccount(generation = refreshGeneration) {
   try {
     const account = await api("/account");
     if (!connected || generation !== refreshGeneration) return;
+    if (account.source === "okx_public") {
+      $("equity").textContent = "—";
+      $("account-note").textContent = "公共行情研究模式";
+      return;
+    }
     $("equity").textContent = fmt(account.equity);
     signed("unrealized", account.unrealized_pnl);
     $("account-note").textContent = `可用余额 ${fmt(account.available)} USDT`;
@@ -346,6 +385,7 @@ async function refresh() {
   }
   if (generation !== refreshGeneration) return;
   state = next;
+  renderHistory(state.history);
   connected = true;
   lastSync = Date.now();
   confirmedPause = false;
@@ -358,10 +398,14 @@ async function refresh() {
   $("source-notice").classList.toggle("live", state.mode === "live");
   $("source-notice").textContent =
     state.source === "offline"
-      ? "离线演练已启用 · 行情为合成样本，订单仅记入本地账本。连接 OKX 模拟盘请在服务端配置凭据和数据源。"
+      ? state.history
+        ? "离线演练 · 策略和回测使用合成样本，公共行情显示在图表。"
+        : "离线演练已启用 · 行情为合成样本，订单仅记入本地账本。连接 OKX 模拟盘请在服务端配置凭据和数据源。"
       : state.mode === "live"
         ? "实盘环境 · 启动策略将使用真实资金。请核对账户、逐仓设置及仓位限额。"
-        : "OKX 模拟盘 · 订单将发送至模拟账户。密钥仅由服务端读取。";
+        : state.history && !state.credentials_ready
+          ? "OKX 公共行情研究 · 可生成策略和回测。暂停执行入口，账户数据不可用。"
+          : "OKX 模拟盘 · 订单将发送至模拟账户。密钥仅由服务端读取。";
   $("risk-order").textContent = `${state.risk.max_order_usdt} USDT`;
   $("risk-position").textContent = `${state.risk.max_position_usdt} USDT`;
   $("risk-fraction").textContent =
@@ -609,8 +653,16 @@ Promise.all([refresh(), loadMarket()]).catch((e) => {
 });
 setInterval(() => {
   if (!document.hidden)
-    refresh().catch((e) => {
+    Promise.all([refresh(), ...(state?.history ? [loadMarket()] : [])]).catch((e) => {
       $("connection").textContent = "服务连接中断";
       notify(e.message, true);
     });
 }, 15000);
+
+for (const [id, endpoint] of [["subscribe-market", "/market/subscriptions"], ["unsubscribe-market", "/market/unsubscribe"]]) {
+  $(id).addEventListener("click", () => busy(id, async () => {
+    await api(endpoint, {symbol: $("symbol").value, bar: $("bar").value});
+    await Promise.all([refresh(), loadMarket()]);
+    notify("采集订阅已更新");
+  }));
+}

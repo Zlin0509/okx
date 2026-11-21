@@ -42,6 +42,7 @@ class Engine:
         self._identity_lock = threading.Lock()
         self._operation_lock = operation_lock(store.path)
         self.startup_error = None
+        self.history = None
         with store.connect() as db:
             if settings.source == "offline":
                 db.execute("INSERT OR IGNORE INTO paper(scope,cash) VALUES(?,10000)", (self.scope,))
@@ -65,7 +66,9 @@ class Engine:
     def view_scope(self):
         return self._scope or self.legacy_scope
 
-    def candles(self, symbol, bar):
+    def candles(self, symbol, bar, *, minimum=10, signal=False):
+        if self.history and self.settings.source == "okx":
+            return self.history.candles(symbol, bar, minimum=minimum, signal=signal)
         candles = (
             fixture(symbol, bar) if self.settings.source == "offline" else self.exchange.candles(symbol, bar)
         )
@@ -229,11 +232,18 @@ class Engine:
         }
 
     def refresh_signal_age(self, signal):
+        healthy = (
+            self.history is None
+            or self.settings.source != "okx"
+            or self.history.fresh(signal["symbol"], signal["bar"], signal["candle_ts"])
+        )
         now = self.now_ms()
+        if not healthy:
+            signal["market_unavailable"] = True
         signal.update(
             {
                 "age_seconds": (now - signal["close_ts_ms"]) / 1000,
-                "executable": signal["close_ts_ms"] <= now <= signal["deadline_ms"],
+                "executable": healthy and signal["close_ts_ms"] <= now <= signal["deadline_ms"],
             }
         )
         return signal["executable"]
@@ -243,14 +253,25 @@ class Engine:
         return {
             "action": "expired",
             "signal": signal,
-            "note": "信号超出原始有效期或时间超前；等待下一根已完成 K 线，不补单",
+            "note": (
+                "公共行情断连或已落后，等待新鲜已确认K线"
+                if signal.get("market_unavailable")
+                else "信号超出原始有效期或时间超前；等待下一根已完成 K 线，不补单"
+            ),
         }
 
     def signal(self, spec):
-        signal = target(self.candles(spec.symbol, spec.bar), spec)
+        candles = (
+            self.candles(spec.symbol, spec.bar, minimum=max(10, spec.slow), signal=True)
+            if self.history and self.settings.source == "okx"
+            else self.candles(spec.symbol, spec.bar)
+        )
+        signal = target(candles, spec)
         age_ms = self.now_ms() - (signal["candle_ts"] + BARS[spec.bar])
         signal.update(
             {
+                "symbol": spec.symbol,
+                "bar": spec.bar,
                 "close_ts_ms": signal["candle_ts"] + BARS[spec.bar],
                 "deadline_ms": signal["candle_ts"]
                 + BARS[spec.bar]

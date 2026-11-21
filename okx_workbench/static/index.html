@@ -49,6 +49,13 @@
           <button class="button subtle" id="refresh">↻ 刷新数据</button>
         </div>
         <div id="source-notice" class="notice">正在读取数据源…</div>
+        <section class="notice" aria-label="公共行情采集">
+          <strong>公共行情与本地历史</strong>
+          <p id="history-status">行情采集状态待同步</p>
+          <button id="subscribe-market" type="button" class="button subtle">采集所选合约/周期</button>
+          <button id="unsubscribe-market" type="button" class="button subtle">取消所选采集</button>
+          <small>采集独立于策略启停；不提交订单。仅已确认K线用于策略。</small>
+        </section>
         <div id="blocker-notice" class="notice hidden" role="alert"></div>
         <div class="metrics">
           <article>

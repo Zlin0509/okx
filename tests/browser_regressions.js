@@ -17,6 +17,8 @@ async (page, screenshotDir = null) => {
     strategies:[{id:1,spec:{symbol:'BTC-USDT-SWAP',bar:'1H',fast:8,slow:24,allocation:0.05},active:false,source:'offline',validation:report}],orders:[],blockers:[],events:[]};
   let failState=false, delayedStart=false, releaseStart, startSeen, ticks=0, reportCounter=0;
   const generatedRequests=[], marketBars=[];
+  let showPublic=false;
+  const cacheStatus={subscriptions:[],disk_bytes:1048576,budget_bytes:64*1048576,max_rows:10000,retention_days:365,max_pairs:4};
   await page.route('**/api/**', async route=>{
     const path=new URL(route.request().url()).pathname;
     if(path==='/api/state') {if(failState) return route.abort('failed');return route.fulfill({json:structuredClone(state)});}
@@ -24,7 +26,18 @@ async (page, screenshotDir = null) => {
     if(path==='/api/market') {
       const bar=new URL(route.request().url()).searchParams.get('bar');
       marketBars.push(bar);
-      return route.fulfill({json:{source:'offline',candles:bar==='1m'?candles.map((c,i)=>({...c,ts:now-(60-i)*60000})):candles}});
+      const series=bar==='1m'?candles.map((c,i)=>({...c,ts:now-(60-i)*60000})):candles;
+      if(showPublic) return route.fulfill({json:{source:'okx_public',candles:[...series.map(c=>({...c,confirmed:1})),{...series.at(-1),ts:now,confirmed:0}]}});
+      return route.fulfill({json:{source:'offline',candles:series}});
+    }
+    if(path==='/api/market/subscriptions') {
+      const {symbol,bar}=route.request().postDataJSON();
+      state.history.subscriptions=[{symbol,bar,connected:true,state:'collecting',latest_close_ms:now,delay_seconds:45,confirmed_count:300}];
+      return route.fulfill({json:state.history});
+    }
+    if(path==='/api/market/unsubscribe') {
+      state.history.subscriptions=[];
+      return route.fulfill({json:state.history});
     }
     if(path==='/api/strategies/generate') {
       const request=route.request().postDataJSON();generatedRequests.push(request);
@@ -48,7 +61,7 @@ async (page, screenshotDir = null) => {
   });
   for (const width of [1440,390]) {
     await page.setViewportSize({width,height:width===390?844:1000});
-    failState=false;delayedStart=false;state.strategies[0].active=false;state.orders=[];state.blockers=[];reportCounter=0;
+    failState=false;delayedStart=false;showPublic=false;delete state.history;state.strategies[0].active=false;state.orders=[];state.blockers=[];reportCounter=0;
     state.strategies=[{id:1,spec:{symbol:'BTC-USDT-SWAP',bar:'1H',fast:8,slow:24,allocation:0.05},active:false,source:'offline',validation:report}];
     await page.goto('http://127.0.0.1:8766/static/index.html');
     await page.waitForFunction(()=>document.querySelector('#connection-notice').textContent.includes('已连接'));
@@ -89,6 +102,25 @@ async (page, screenshotDir = null) => {
     ensure((await page.locator('#backtest-snapshot').innerText()).includes('/ 1m /'),'form change overwrote minute snapshot');
     ensure((await page.locator('#export').getAttribute('href')).includes('/3/'),'form change replaced minute CSV');
     results.push({width,scenario:'minute_selection_generation_and_backtest',passed:true});
+
+    showPublic=true;state.history=structuredClone(cacheStatus);
+    await page.locator('#refresh').click();
+    await page.waitForFunction(()=>document.querySelector('#history-status').textContent.includes('订阅 0 / 4'));
+    await page.selectOption('#bar','1m');
+    const ticksBeforeCollect=ticks;
+    await page.locator('#subscribe-market').click();
+    await page.waitForFunction(()=>document.querySelector('#history-status').textContent.includes('ETH-USDT-SWAP 1m'));
+    await page.waitForFunction(()=>document.querySelector('#market-source').textContent.includes('尚未收盘'));
+    ensure((await page.locator('#history-status').innerText()).includes('45 秒'),'missing collected data age');
+    ensure((await page.locator('#history-status').innerText()).includes('64 MiB'),'missing disk budget');
+    ensure(!state.strategies[0].active && ticks===ticksBeforeCollect,'collection started strategy execution');
+    state.history.subscriptions[0].state='disconnected';
+    state.history.subscriptions[0].connected=false;
+    await page.locator('#refresh').click();
+    await page.waitForFunction(()=>document.querySelector('#history-status').textContent.includes('断连'));
+    await page.locator('#unsubscribe-market').click();
+    await page.waitForFunction(()=>document.querySelector('#history-status').textContent.includes('订阅 0 / 4'));
+    results.push({width,scenario:'public_cache_controls_and_disconnected_state',passed:true});
 
     delayedStart=true;let seen=new Promise(resolve=>startSeen=resolve);
     await page.locator('#start').click();await page.locator('#confirm-start').click();await seen;
