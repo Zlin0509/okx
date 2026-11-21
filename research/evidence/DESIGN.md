@@ -24,7 +24,7 @@ python -m research.evidence --dossier ./mock-evidence --expected-sha256 "$(sha25
 | exact_eligible_dates | 固定训练及验证边界、指定登记的原测试或备用测试区间、至少 365 个已完成且连续的 UTC 日。隔离日期拒绝；备用区间要求原窗口独立判定无效，保留登记边界。 |
 | prior_exposure_audit | 审计覆盖、获取截止、已知暴露日期冲突与未知边界。历史证据模式还需提供 R3 原暴露清单的完整固定哈希文件 `known-exposure-r3.json`，核验其公告元数据日期是否逐日结转。它不授予任何历史有效资格。 |
 | actual_funding_calendar_and_marks | 独立见证的分段结算 cadence 覆盖所有所需币种日。调度点由段的开始、排他结束、首个点和周期生成，实际费率和精确应用 mark 以币种和调度点匹配，并要求实际结算时间与事件 ID 相同。保留真实零与负费率；缺任一项、重复、非精确 mark、OHLC 或 WS 状态替代均不通过。 |
-| spot_baseline_prices | BTC 与周度声明的六至八只现货的日期覆盖，核对可见及有效上市匹配。等权所需开收盘覆盖周二执行至后一周再平衡，首选和换出腿均考虑。 |
+| spot_baseline_prices | BTC 与周度声明的六至八只现货的日期覆盖，核对可见及有效上市匹配，并验证所用日的开盘和日末可交易性。等权所需开收盘覆盖周二执行至后一周再平衡，首选和换出腿均考虑。 |
 | venue_constraints_and_capacity | 检查有效合约规则日期、正 tick／lot、确认的滞后 `volCcyQuote` 证明覆盖，包含日度退出或成交所需的前 30 个完整日。该材料是参与度计算的输入，执行容量仍须另审。 |
 | source_and_dependency_freeze | 精确固定 R1 登记、R2 决策、R3 的 110 项源冻结和依赖锁，按 SHA 核查全部源文件。 |
 | independent_preregistration_approval | 检查编制者与审核者标识不同、受审成员字节绑定、审核时间晚于或等于数据截止且不晚于回执获取。核对一致性不验证账号身份或准入决定。 |

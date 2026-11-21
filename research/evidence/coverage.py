@@ -1,6 +1,7 @@
 """Point-in-time lifecycle, declared candidate families and calendar joins."""
 
 from collections import defaultdict
+from datetime import timedelta
 
 from ..engine import number
 from ..execution_audit import canonical, sha
@@ -203,6 +204,15 @@ def spot(body, cal, u, req, src, findings, artifact):
             )
             # Tuesday open through the next Tuesday rebalance, where an old leg may be sold.
             targets[symbol].update(evaluation_days.intersection(days(d + ONE_DAY, d + 8 * ONE_DAY)))
+    for symbol, required_days in sorted(targets.items()):
+        for d in sorted(required_days):
+            if symbol not in u["spots"] or any(
+                listing_at(u, symbol, ts)[0] is None
+                for ts in (midnight(d), midnight(d + ONE_DAY) - timedelta(microseconds=1))
+            ):
+                findings.add(
+                    artifact, "spot_tradability_not_proven_on_required_day", f"{symbol} {d.isoformat()}"
+                )
     missing_coverage(
         intervals(body["spot_daily_open_close_coverage"]),
         targets,

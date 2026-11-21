@@ -1,0 +1,21 @@
+{
+  "change_reason": "Check required spot days at the open and last instant, including independent BTC buy-and-hold.",
+  "preserved_release": "1acd6b7584b325cc5b836b43500ad80e26f5963d",
+  "reviewed_report_base": "a516f7e0897ed1a495f41a0593ccf88108c69e39",
+  "sha256": {
+    "research/README.md": "ff3406925288293f39bf5b2a35e7795feefd017fcdd5143df7170d1cd982a3b2",
+    "research/evidence/DESIGN.md": "8e5af2dc5ea7781da42918c8118b5811e90db21acf4c339fd6e790b314f86e51",
+    "research/evidence/__init__.py": "7aa4dc90ca0d909e73586b4e9a5e424e4f2ff796871ef9d770214cc753ce1ca2",
+    "research/evidence/__main__.py": "6854f263fc3bfe4412cc69aca8cf19acf184c707010b0e55ba474f0232fd114b",
+    "research/evidence/calendar.py": "bde7ac3e4392671ae7fba5fb39465424700b0024d25fc313930c667618364cad",
+    "research/evidence/common.py": "2664e8478455ee93aab523e9891c25f989f024974933384350c2b8e42d4a6492",
+    "research/evidence/coverage.py": "3521d462187b8e3ba9b0365c7c2c6f589a6491e3b3e0db717361c4105f048def",
+    "research/evidence/fixture.py": "5608eb86b1022d923890a2aacb744447841448e12be88af1ab43eee7d7c2a3d3",
+    "research/evidence/funding.py": "8d63df963769be27ced1b6f8e09b9d2a0fcd294043ff54fb7522557932fed520",
+    "research/evidence/intake.py": "48ac3785102263d6f7ec1ea41c4c5581b9d52f165c0ccf4b09cb75fe8e71e6e7",
+    "research/evidence/validator.py": "7c6f5fd9ee62d71526be3c9178e16e3dff759804fdbf4d73c93fac6c9ef8fa3a",
+    "tests/test_research_evidence.py": "1c39fb94e44738f299b3f77b464331bdd6a12d2e394895fac444db9685d8040d"
+  },
+  "supersedes_sha256": "28d87260dc437166a8201e443c9dedd7027f12586193ee81595664618e1c61e7",
+  "version": "ZLIN-11-offline-evidence-v3"
+}

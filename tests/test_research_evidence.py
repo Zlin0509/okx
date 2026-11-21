@@ -255,3 +255,27 @@ def test_upstream_report_source_freeze_still_verifies():
     from research.reporting.report import verify_reporting_source
 
     assert verify_reporting_source() == "ca894d5434ff37a63b6e415b0f666667d8ee94ba38c29aa0f66839d8e4cb0400"
+
+
+def test_spot_btc_requires_verified_tradability_even_when_price_coverage_claimed():
+    from research.evidence.coverage import spot
+
+    d = day("2025-01-02")
+    src = {"spot_baseline_calendar": ("spot_baseline_calendar", instant(CUTOFF))}
+    catalog = {
+        "spots": {"BTC-USDT"},
+        "schedules": {
+            "BTC-USDT": [
+                (instant("2019-01-01T00:00:00Z"), instant("2018-12-01T00:00:00Z"), "listed"),
+                (instant("2025-01-02T12:00:00Z"), instant("2025-01-01T00:00:00Z"), "delisted"),
+            ]
+        },
+    }
+    body = {
+        "source_id": "spot_baseline_calendar",
+        "selections": [],
+        "spot_daily_open_close_coverage": {"BTC-USDT": [["2025-01-02", "2025-01-02"]]},
+    }
+    f = Findings()
+    spot(body, {"all": (d,)}, catalog, {"decisions": set()}, src, f, SPOT)
+    assert codes({"findings": f.result()}) == {(SPOT, "spot_tradability_not_proven_on_required_day"): 1}
