@@ -1,0 +1,17 @@
+{
+  "sha256": {
+    "research/README.md": "ff3406925288293f39bf5b2a35e7795feefd017fcdd5143df7170d1cd982a3b2",
+    "research/reporting/DESIGN.md": "782b0cf91bdf1b356426a942419a68c5d6bfd220d43e555ee5a54b8c19f95b35",
+    "research/reporting/INPUT_ANCHORS.json": "3b665f6a56bf6ffcb113aef1fbec9d2970a356b12c90a4031a5ea429f7b526f7",
+    "research/reporting/__init__.py": "368d15713c707df9d7644bdf0590caa14294f87442e6ebab1bd74114288681c2",
+    "research/reporting/__main__.py": "f3f7460432b1f6199aa21895e262aac9225f48ba1cb8f1ceffe94f6d1334beb6",
+    "research/reporting/attribution.py": "032303cb0891609df102da5a2a9c52dafde7435d94639a5bb35513acbe6bc38e",
+    "research/reporting/charts.py": "bb5ef8729676251b80ea9ea7950ebaa3fa1ab1e049a3cfc1ecff691374075132",
+    "research/reporting/metrics.py": "2b8a4f26df98b508dcf4f3f1c4eee7c45c02a6a642336bab6971d2583ed60774",
+    "research/reporting/render.py": "810d245ec939a06a1f826552dda6f28412fabd8d9909e06d6b3f119278a1b5b8",
+    "research/reporting/report.py": "417e3ac8ed6beb62dde500066af41af27d5833d1c8a2250781c1affc82eaf20e",
+    "tests/test_research_reporting.py": "0e5b84fdc79ca67e542e071229e4431adbe128a3bc33e76dc3396b0485daee21"
+  },
+  "upstream_reviewed_head": "1acd6b7584b325cc5b836b43500ad80e26f5963d",
+  "version": "ZLIN-11-reporting-v1"
+}

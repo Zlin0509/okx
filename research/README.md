@@ -33,3 +33,7 @@ python3 -m research.experiments acceptance-synthetic --output ./acceptance_mock
 ```
 
 `acceptance.json` 含模拟现货持有及历史时点等权基准、逐成交关系交易计数、基础与加倍成本下的 28 日配对块重采样和联合门槛。所有结果均带 `synthetic_test` 来源。真实验收状态为 `unavailable`。口径和拒绝条件见 [R3 计算说明](experiments/DESIGN_R3.md)。
+
+### 冻结账本的中文报告
+
+现货基准、六配置成本敏感性、Sortino、完整月胜率、换手、相关性与回撤归因可用一条离线命令生成。输入及命令见[报告复现说明](reporting/DESIGN.md)。
