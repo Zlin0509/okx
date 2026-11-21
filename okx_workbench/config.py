@@ -25,6 +25,11 @@ class Settings:
     slippage_bps: Decimal = Decimal("20")
     database: str = "data/workbench.sqlite3"
     account_state_dir: str = field(default_factory=lambda: str(Path.home() / ".local/share/okx-workbench"))
+    history_enabled: bool = False
+    history_max_rows: int = 10000
+    history_days: int = 365
+    history_budget_mb: int = 64
+    history_max_pairs: int = 4
     max_signal_age_seconds: int = 300
 
     def __post_init__(self):
@@ -64,5 +69,13 @@ class Settings:
             equity_fraction=Decimal(os.getenv("MAX_EQUITY_FRACTION", "0.10")),
             slippage_bps=Decimal(os.getenv("MAX_SLIPPAGE_BPS", "20")),
             database=os.getenv("DATABASE_PATH", "data/workbench.sqlite3"),
+            history_enabled=os.getenv(
+                "MARKET_HISTORY_ENABLED", "1" if os.getenv("OKX_DATA_SOURCE") == "okx" else "0"
+            )
+            == "1",
+            history_max_rows=int(os.getenv("MARKET_MAX_ROWS", "10000")),
+            history_days=int(os.getenv("MARKET_RETENTION_DAYS", "365")),
+            history_budget_mb=int(os.getenv("MARKET_DISK_MB", "64")),
+            history_max_pairs=int(os.getenv("MARKET_MAX_PAIRS", "4")),
             max_signal_age_seconds=int(os.getenv("MAX_SIGNAL_AGE_SECONDS", "300")),
         )

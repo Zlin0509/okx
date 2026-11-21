@@ -2,6 +2,8 @@ import asyncio
 import csv
 import io
 import json
+import logging
+import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -14,6 +16,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import BARS, SYMBOLS, Settings
 from .execution import Engine
+from .history import POLL_SECONDS, CacheCapacityError, Collector, History
 from .market import OKX, TradingError
 from .store import Store
 from .strategy import BacktestRequest, StrategySpec, backtest, generate, serialize_candles
@@ -34,11 +37,26 @@ class RecoveryRequest(BaseModel):
     confirmation: Literal["ABANDON_WITHOUT_RESEND"]
 
 
-def create_app(settings=None, exchange=None):
+def create_app(settings=None, exchange=None, public_market=None):
     settings = settings or Settings.from_env()
+    cache_path = Path(settings.database).resolve().with_name("market-cache.sqlite3")
+    if Path(settings.database).resolve() == cache_path:
+        raise ValueError("交易账本不能使用行情缓存文件名")
     store = Store(settings.database)
     exchange = exchange or OKX(settings)
     engine = Engine(settings, store, exchange)
+    collector = None
+    if settings.history_enabled:
+        cache = History(
+            cache_path,
+            settings.history_max_rows,
+            settings.history_days,
+            settings.history_budget_mb * 1024 * 1024,
+            settings.history_max_pairs,
+        )
+        collector = Collector(cache, public_market, base_url=settings.base_url)
+        engine.history = collector
+    research_only = collector is not None and settings.source == "okx" and not settings.credentials_ready
 
     @asynccontextmanager
     async def lifespan(app):
@@ -53,7 +71,8 @@ def create_app(settings=None, exchange=None):
             raise RuntimeError("此数据库已有服务进程运行，请只使用一个 worker") from None
         store.stop()
         try:
-            await asyncio.to_thread(engine.reconcile, True)
+            if not research_only:
+                await asyncio.to_thread(engine.reconcile, True)
         except TradingError as exc:
             engine.startup_error = str(exc)
             store.event("启动对账失败：" + str(exc), "error")
@@ -67,6 +86,19 @@ def create_app(settings=None, exchange=None):
                 except TimeoutError:
                     pass
 
+        async def collect():
+            while not stop.is_set():
+                try:
+                    await asyncio.to_thread(collector.poll)
+                except (TradingError, sqlite3.Error, OSError):
+                    collector.state.clear()
+                    logging.getLogger(__name__).warning("行情缓存不可用，采集暂停至下一轮")
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=POLL_SECONDS)
+                except TimeoutError:
+                    pass
+
+        market_task = asyncio.create_task(collect()) if collector else None
         task = asyncio.create_task(run())
         try:
             yield
@@ -74,6 +106,9 @@ def create_app(settings=None, exchange=None):
             store.stop()
             stop.set()
             await task
+            if market_task:
+                await market_task
+                collector.public.close()
             exchange.close()
             lock_file.close()
 
@@ -98,6 +133,10 @@ def create_app(settings=None, exchange=None):
         )
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    @app.exception_handler(CacheCapacityError)
+    async def capacity_error(request, exc):
+        return JSONResponse({"detail": str(exc), "capacity_issue": exc.diagnostic}, status_code=409)
 
     @app.exception_handler(TradingError)
     async def trading_error(request, exc):
@@ -128,6 +167,7 @@ def create_app(settings=None, exchange=None):
                 }
             )
         return {
+            "history": collector.status() if collector else None,
             "mode": settings.mode,
             "source": settings.source,
             "credentials_ready": settings.credentials_ready,
@@ -155,19 +195,46 @@ def create_app(settings=None, exchange=None):
         bar: Literal["1m", "1H", "4H", "1D"] = "1H",
     ):
         spec = StrategySpec(symbol=symbol, bar=bar)
+        if collector:
+            collector.check_capacity()
+            rows = collector.history.rows(symbol, bar, confirmed=False, limit=300)
+            return {
+                "source": "okx_public",
+                "candles": [
+                    dict(zip(("ts", "open", "high", "low", "close", "volume", "confirmed"), row, strict=True))
+                    for row in rows
+                ],
+            }
         return {
             "source": settings.source,
             "candles": serialize_candles(engine.candles(spec.symbol, spec.bar)),
         }
 
+    @app.post("/api/market/subscriptions")
+    def subscription(spec: StrategySpec):
+        if not collector:
+            raise TradingError("请启用MARKET_HISTORY_ENABLED后重启服务")
+        collector.history.subscribe(spec.symbol, spec.bar)
+        return collector.status()
+
+    @app.post("/api/market/unsubscribe")
+    def unsubscribe(spec: StrategySpec):
+        if not collector:
+            raise TradingError("行情采集未启用")
+        collector.history.unsubscribe(spec.symbol, spec.bar)
+        return collector.status()
+
     @app.get("/api/account")
     def account():
+        if research_only:
+            return {"source": "okx_public"}
         return engine.account()
 
     @app.post("/api/strategies/generate")
     def generate_strategy(spec: StrategySpec):
-        report = generate(engine.candles(spec.symbol, spec.bar), spec, settings)
-        report.update({"source": settings.source, "scope": engine.scope})
+        report = generate(engine.candles(spec.symbol, spec.bar, minimum=130), spec, settings)
+        scope = None if research_only else engine.scope
+        report.update({"source": settings.source, "scope": scope})
         report["id"] = store.add_strategy(report)
         store.event(f"已生成策略 #{report['id']}；未启动交易")
         return report
@@ -175,7 +242,7 @@ def create_app(settings=None, exchange=None):
     @app.post("/api/backtests")
     def run_backtest(spec: BacktestRequest):
         result = backtest(
-            engine.candles(spec.symbol, spec.bar),
+            engine.candles(spec.symbol, spec.bar, minimum=max(10, spec.slow + 2)),
             spec,
             spec.initial_capital,
             spec.fee_bps,
@@ -211,6 +278,8 @@ def create_app(settings=None, exchange=None):
 
     @app.post("/api/strategies/{strategy_id}/start")
     def start(strategy_id: int, body: StartRequest):
+        if research_only:
+            raise TradingError("当前仅使用公共行情研究，未配置模拟盘交易凭据")
         expected = "START_OFFLINE" if settings.source == "offline" else "START_" + settings.mode.upper()
         if body.confirmation != expected:
             raise TradingError("启动确认与当前交易环境不符")
@@ -219,6 +288,8 @@ def create_app(settings=None, exchange=None):
 
     @app.post("/api/strategies/{strategy_id}/tick")
     def tick(strategy_id: int):
+        if research_only:
+            raise TradingError("当前仅使用公共行情研究，无法执行订单")
         try:
             return engine.execute(strategy_id)
         except Exception:
