@@ -1,9 +1,11 @@
+import fcntl
 import sqlite3
 import threading
 import time
 
 import httpx
 import pytest
+from conftest import FakeOKX
 from fastapi.testclient import TestClient
 
 from okx_workbench.app import create_app
@@ -251,3 +253,96 @@ def test_public_research_routes_bootstrap_and_collect_independently(tmp_path, cl
         assert candles and candles[-1]["confirmed"] == 0
         assert client.post("/api/market/subscriptions", json={"bar": "4H"}).status_code == 200
         assert client.post("/api/market/unsubscribe", json={"bar": "4H"}).status_code == 200
+
+
+@pytest.mark.parametrize("reason", ["budget", "main_file_limit"])
+def test_capacity_fault_preserves_strategy_state_and_recovers(tmp_path, clock, monkeypatch, reason):
+    monkeypatch.setattr("okx_workbench.app.POLL_SECONDS", 0.02)
+    exchange = FakeOKX()
+    settings = Settings(
+        source="okx",
+        api_key="mock",
+        secret="mock",
+        passphrase="mock",
+        history_enabled=True,
+        history_budget_mb=4,
+        database=str(tmp_path / "ledger.sqlite3"),
+    )
+    budget = 4 * 1024 * 1024
+    app = create_app(settings, exchange=exchange, public_market=Feed(clock))
+    cache = tmp_path / "market-cache.sqlite3"
+
+    def wait_for_history(client, latest_close):
+        for _ in range(200):
+            state = client.get("/api/state").json()
+            history = state["history"]
+            if history["subscriptions"] and any(
+                row["connected"] and row["latest_close_ms"] == latest_close
+                for row in history["subscriptions"]
+            ):
+                return state
+            time.sleep(0.01)
+        pytest.fail("行情未完成回补")
+
+    with TestClient(app) as client:
+        closed = clock[0] // BARS["1H"] * BARS["1H"]
+        wait_for_history(client, closed)
+        generated = client.post("/api/strategies/generate", json={})
+        assert generated.status_code == 200
+        sid = generated.json()["id"]
+        original = client.get("/api/state").json()
+        started = client.post(
+            f"/api/strategies/{sid}/start",
+            json={"confirmation": "START_DEMO", "control_epoch": original["control_epoch"]},
+        )
+        assert started.status_code == 200
+        active = client.get("/api/state").json()
+        assert active["strategies"][0]["active"]
+        assert client.get("/api/market").json()["candles"]
+
+        pressure = cache.with_name(cache.name + "-wal") if reason == "budget" else cache
+        with cache.with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            previous_bytes = pressure.stat().st_size if pressure.exists() else None
+            with pressure.open("a+b") as f:
+                f.truncate(budget if reason == "budget" else budget // 3 + 1)
+
+        assert client.get("/api/health").status_code == 200
+        result = client.get("/api/state")
+        assert result.status_code == 200
+        blocked = result.json()
+        assert blocked["strategies"] == active["strategies"]
+        assert blocked["control_epoch"] == active["control_epoch"]
+        assert blocked["orders"] == active["orders"]
+        diagnostics = blocked["history"]
+        assert diagnostics["subscriptions"] is None
+        issue = diagnostics["capacity_issue"]
+        assert issue["reason"] == reason
+        assert (
+            diagnostics["disk_bytes"]
+            == issue["disk_bytes"]
+            == (cache.stat().st_size + (pressure.stat().st_size if pressure != cache else 0))
+        )
+        assert diagnostics["budget_bytes"] == issue["budget_bytes"] == budget
+        assert issue["main_limit_bytes"] == budget // 3
+        market = client.get("/api/market")
+        assert market.status_code == 409 and market.json()["capacity_issue"] == issue
+        assert "candles" not in market.json()
+        attempt = client.post(f"/api/strategies/{sid}/tick", json={})
+        assert attempt.status_code == 409
+        assert not exchange.submissions
+        assert not client.get("/api/state").json()["strategies"][0]["active"]
+
+        with cache.with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if previous_bytes is None:
+                pressure.unlink()
+            else:
+                with pressure.open("r+b") as f:
+                    f.truncate(previous_bytes)
+            clock[0] += BARS["1H"]
+        recovered = wait_for_history(client, closed + BARS["1H"])
+        history = recovered["history"]
+        assert history["capacity_issue"] is None and history["disk_bytes"] < budget
+        assert not recovered["strategies"][0]["active"]
+        assert client.get("/api/market").json()["candles"][-1]["ts"] == closed + BARS["1H"]

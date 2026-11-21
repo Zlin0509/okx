@@ -22,6 +22,25 @@ def now_ms():
     return int(time.time() * 1000)
 
 
+class CacheCapacityError(TradingError):
+    messages = {
+        "budget": "行情缓存达到磁盘预算",
+        "main_file_limit": "行情缓存主文件超过安全上限",
+        "sqlite_full": "行情缓存写入空间不足",
+    }
+
+    def __init__(self, reason, history, main_bytes, disk_bytes):
+        super().__init__(self.messages[reason])
+        self.diagnostic = {
+            "reason": reason,
+            "detail": str(self),
+            "main_bytes": main_bytes,
+            "main_limit_bytes": history.budget // 3,
+            "disk_bytes": disk_bytes,
+            "budget_bytes": history.budget,
+        }
+
+
 class History:
     def __init__(self, path, max_rows=10000, days=365, budget=64 * 1024 * 1024, max_pairs=4):
         if not 301 <= max_rows <= 100000 or not 1 <= days <= 3650 or budget < 4 * 1024 * 1024:
@@ -60,24 +79,26 @@ class History:
             fcntl.flock(lock, fcntl.LOCK_EX)
             # Refuse to open an unrelated ledger, even if the path was aliased to it.
             existed = self.path.exists()
-            if existed and self.path.stat().st_size > self.budget // 3:
-                raise TradingError("现有行情缓存超过主文件安全上限，请调整磁盘预算或停服归档行情缓存")
+            self.check_capacity()
             db = sqlite3.connect(self.path, timeout=5)
             try:
                 if (existed or not initialize) and db.execute("PRAGMA application_id").fetchone()[
                     0
                 ] != CACHE_ID:
                     raise TradingError("拒绝将非行情数据库用作缓存")
-                if self.disk_bytes() >= self.budget:
-                    raise TradingError("行情缓存达到磁盘预算")
                 db.execute("PRAGMA temp_store=MEMORY")
                 # The journal can contain an old copy of modified pages. Leave two thirds for it and headers.
                 page_size = db.execute("PRAGMA page_size").fetchone()[0]
                 db.execute(f"PRAGMA max_page_count={self.budget // (3 * page_size)}")
                 yield db
                 db.commit()
-            except Exception:
+            except Exception as exc:
                 db.rollback()
+                if (
+                    isinstance(exc, sqlite3.Error)
+                    and getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_FULL
+                ):
+                    raise self.capacity_error("sqlite_full") from exc
                 raise
             finally:
                 db.close()
@@ -102,14 +123,27 @@ class History:
                 return self.pairs(db)
         return db.execute("SELECT symbol,bar FROM subscriptions ORDER BY symbol,bar").fetchall()
 
-    def disk_bytes(self):
+    def disk_usage(self):
         sizes = []
         for suffix in ("", "-wal", "-shm", "-journal"):
             try:
                 sizes.append(Path(str(self.path) + suffix).stat().st_size)
             except FileNotFoundError:
-                pass
-        return sum(sizes)
+                sizes.append(0)
+        return sizes[0], sum(sizes)
+
+    def disk_bytes(self):
+        return self.disk_usage()[1]
+
+    def capacity_error(self, reason):
+        return CacheCapacityError(reason, self, *self.disk_usage())
+
+    def check_capacity(self):
+        main_bytes, disk_bytes = self.disk_usage()
+        if disk_bytes >= self.budget:
+            raise CacheCapacityError("budget", self, main_bytes, disk_bytes)
+        if main_bytes > self.budget // 3:
+            raise CacheCapacityError("main_file_limit", self, main_bytes, disk_bytes)
 
     def ingest(self, symbol, bar, rows, *, before=None):
         now = now_ms()
@@ -247,7 +281,9 @@ class Collector:
             else:
                 detail = "行情缓存无法写入，请检查容量和权限"
             previous = self.state.get(pair)
-            self.state[pair] = ("disconnected", previous[1] if previous else None, None, detail)
+            page_full = isinstance(exc, CacheCapacityError) and exc.diagnostic["reason"] == "sqlite_full"
+            phase = "capacity_blocked" if page_full else "disconnected"
+            self.state[pair] = (phase, previous[1] if previous else None, None, detail)
             return
         self.retry.pop(pair, None)
         self.state[pair] = ("collecting", synced, latest, None)
@@ -284,7 +320,31 @@ class Collector:
             raise TradingError("公共行情断连或已落后，等待新鲜已确认K线")
         return candles
 
+    def check_capacity(self):
+        self.history.check_capacity()
+        if any(phase == "capacity_blocked" for phase, *_ in self.state.copy().values()):
+            raise self.history.capacity_error("sqlite_full")
+
     def status(self):
+        try:
+            self.check_capacity()
+            items = self.subscription_status()
+        except CacheCapacityError as exc:
+            items = None
+            issue = exc.diagnostic
+        else:
+            issue = None
+        return dict(
+            subscriptions=items,
+            capacity_issue=issue,
+            disk_bytes=issue["disk_bytes"] if issue else self.history.disk_bytes(),
+            budget_bytes=self.history.budget,
+            max_rows=self.history.max_rows,
+            retention_days=self.history.days,
+            max_pairs=self.history.max_pairs,
+        )
+
+    def subscription_status(self):
         now = now_ms()
         items = []
         for symbol, bar in self.history.pairs():
@@ -310,11 +370,4 @@ class Collector:
                     detail=detail,
                 )
             )
-        return dict(
-            subscriptions=items,
-            disk_bytes=self.history.disk_bytes(),
-            budget_bytes=self.history.budget,
-            max_rows=self.history.max_rows,
-            retention_days=self.history.days,
-            max_pairs=self.history.max_pairs,
-        )
+        return items

@@ -16,7 +16,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import BARS, SYMBOLS, Settings
 from .execution import Engine
-from .history import POLL_SECONDS, Collector, History
+from .history import POLL_SECONDS, CacheCapacityError, Collector, History
 from .market import OKX, TradingError
 from .store import Store
 from .strategy import BacktestRequest, StrategySpec, backtest, generate, serialize_candles
@@ -134,6 +134,10 @@ def create_app(settings=None, exchange=None, public_market=None):
         response.headers["Cache-Control"] = "no-store"
         return response
 
+    @app.exception_handler(CacheCapacityError)
+    async def capacity_error(request, exc):
+        return JSONResponse({"detail": str(exc), "capacity_issue": exc.diagnostic}, status_code=409)
+
     @app.exception_handler(TradingError)
     async def trading_error(request, exc):
         return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=409)
@@ -192,6 +196,7 @@ def create_app(settings=None, exchange=None, public_market=None):
     ):
         spec = StrategySpec(symbol=symbol, bar=bar)
         if collector:
+            collector.check_capacity()
             rows = collector.history.rows(symbol, bar, confirmed=False, limit=300)
             return {
                 "source": "okx_public",

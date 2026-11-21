@@ -964,13 +964,15 @@ section {
   }
 }
 
-#connection-notice {
+#connection-notice,
+#history-capacity-notice {
   margin-bottom: 16px;
 }
 .status-dot.inactive {
   background: #aab4a5;
 }
 #connection-notice.warning,
+#history-capacity-notice,
 #blocker-notice {
   background: #fbeee6;
   border-color: #b86443;

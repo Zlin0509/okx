@@ -37,7 +37,8 @@ function disconnected(note = "服务连接中断；执行状态待同步") {
   $("connection-notice").textContent =
     `${note}。最后同步：${lastSync ? date(lastSync) : "尚未成功"}。金额显示已清空；暂停入口仍可用。`;
   $("connection-notice").classList.add("warning");
-  $("history-status").textContent = "本地服务连接中断，等待确认采集状态。";
+  if (!state?.history?.capacity_issue)
+    $("history-status").textContent = "本地服务连接中断，等待确认采集状态。";
   $("subscribe-market").disabled = $("unsubscribe-market").disabled = true;
   $("execution-state").textContent = confirmedPause
     ? "暂停已确认 / 待同步"
@@ -150,7 +151,10 @@ function signed(id, value) {
 }
 function chart(id, points, key, baseline) {
   const container = $(id);
-  if (!points.length) return;
+  if (!points.length) {
+    container.replaceChildren();
+    return;
+  }
   const w = Math.max(300, container.clientWidth),
     h = container.clientHeight;
   const left = 8,
@@ -204,14 +208,11 @@ async function loadMarket() {
     data = await api(`/market?symbol=${encodeURIComponent(symbol)}&bar=${encodeURIComponent(bar)}`);
   } catch (e) {
     if (generation !== marketGeneration) return;
-    marketData = [];
-    $("last-price").textContent = "—";
-    $("market-source").textContent = "行情读取失败";
-    $("market-range").textContent = e.message;
-    chart("market-chart", marketData, "close");
+    clearMarket("行情读取失败", e.message);
     return;
   }
   if (generation !== marketGeneration) return;
+  if (state?.history?.capacity_issue) return;
   marketData = data.candles;
   const last = marketData.at(-1);
   $("market-heading").textContent = symbol.replace("-USDT-SWAP", " / USDT 永续");
@@ -225,7 +226,33 @@ async function loadMarket() {
   chart("market-chart", marketData, "close");
 }
 
+function clearMarket(label, detail) {
+  marketData = [];
+  $("last-price").textContent = "—";
+  $("market-source").textContent = label;
+  $("market-range").textContent = detail;
+  chart("market-chart", marketData, "close");
+}
+
 function renderHistory(history) {
+  const issue = history?.capacity_issue;
+  const notice = $("history-capacity-notice");
+  notice.classList.toggle("hidden", !issue);
+  if (issue) {
+    const mib = (bytes) => (bytes / 1048576).toFixed(2);
+    const usage = `占用 ${mib(issue.disk_bytes)} / ${mib(issue.budget_bytes)} MiB（含 SQLite 辅助文件）`;
+    const main = issue.reason === "main_file_limit"
+      ? `，主文件 ${mib(issue.main_bytes)} / ${mib(issue.main_limit_bytes)} MiB`
+      : "";
+    const message = `${issue.detail}，采集暂停。${usage}${main}。释放缓存空间后刷新，或调整 MARKET_DISK_MB 并重启。需要归档时请先停服，只归档行情缓存。`;
+    if (notice.textContent !== message) notice.textContent = message;
+    $("history-status").textContent = `采集受阻。每组最多 ${history.max_rows} 根、${history.retention_days} 天，最多 ${history.max_pairs} 组订阅。`;
+    $("subscribe-market").disabled = $("unsubscribe-market").disabled = true;
+    ++marketGeneration;
+    clearMarket("缓存受阻", issue.detail);
+    return;
+  }
+  notice.textContent = "";
   const enabled = Boolean(history);
   $("subscribe-market").disabled = $("unsubscribe-market").disabled = !enabled;
   if (!enabled) {
@@ -374,7 +401,7 @@ function renderOrders() {
     $("events").append(node);
   });
 }
-async function refresh() {
+async function refresh({market = false} = {}) {
   const generation = ++refreshGeneration;
   let next;
   try {
@@ -450,7 +477,7 @@ async function refresh() {
     selectedId = state.strategies[0].id;
   renderSelection();
   renderOrders();
-  await loadAccount(generation);
+  await Promise.all([loadAccount(generation), ...(market && !state.history?.capacity_issue ? [loadMarket()] : [])]);
 }
 function showBacktest(report, label) {
   lastSnapshot = report.snapshot;
@@ -617,7 +644,7 @@ $("reconcile").addEventListener("click", () =>
 );
 $("refresh").addEventListener("click", () =>
   busy("refresh", async () => {
-    await Promise.all([refresh(), loadMarket()]);
+    await refresh({market: true});
     notify("数据已刷新");
   }),
 );
@@ -647,13 +674,13 @@ window.addEventListener("resize", () => {
     chart("equity-chart", curveData, "equity", curveBaseline);
   }, 100);
 });
-Promise.all([refresh(), loadMarket()]).catch((e) => {
+refresh({market: true}).catch((e) => {
   $("connection").textContent = "连接失败";
   notify(e.message, true);
 });
 setInterval(() => {
   if (!document.hidden)
-    Promise.all([refresh(), ...(state?.history ? [loadMarket()] : [])]).catch((e) => {
+    refresh({market: Boolean(state?.history)}).catch((e) => {
       $("connection").textContent = "服务连接中断";
       notify(e.message, true);
     });
@@ -662,7 +689,7 @@ setInterval(() => {
 for (const [id, endpoint] of [["subscribe-market", "/market/subscriptions"], ["unsubscribe-market", "/market/unsubscribe"]]) {
   $(id).addEventListener("click", () => busy(id, async () => {
     await api(endpoint, {symbol: $("symbol").value, bar: $("bar").value});
-    await Promise.all([refresh(), loadMarket()]);
+    await refresh({market: true});
     notify("采集订阅已更新");
   }));
 }
