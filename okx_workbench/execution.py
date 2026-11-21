@@ -3,6 +3,7 @@ import json
 import threading
 import time
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+from pathlib import Path
 
 from .config import BARS
 from .coordination import account_scope, bind_account
@@ -12,6 +13,18 @@ from .strategy import StrategySpec, target, validate_candles
 
 UNRESOLVED = ("reserved", "submitting", "unknown", "accepted", "live", "partially_filled")
 TERMINAL = {"filled", "canceled", "mmp_canceled"}
+
+# One re-entrant operation lock per database path. create_app() already takes an
+# exclusive process lock per database, so this closes the remaining in-process
+# execute()/reconcile() race between FastAPI worker threads and the tick thread.
+_OPERATION_LOCKS = {}
+_OPERATION_LOCKS_GUARD = threading.Lock()
+
+
+def operation_lock(database):
+    key = str(Path(database).resolve())
+    with _OPERATION_LOCKS_GUARD:
+        return _OPERATION_LOCKS.setdefault(key, threading.RLock())
 
 
 def quantize(value, step, rounding=ROUND_FLOOR):
@@ -27,6 +40,7 @@ class Engine:
         self.legacy_scope = f"{settings.mode}:{settings.source}:{identity}"
         self._scope = self.legacy_scope if settings.source == "offline" else None
         self._identity_lock = threading.Lock()
+        self._operation_lock = operation_lock(store.path)
         self.startup_error = None
         with store.connect() as db:
             if settings.source == "offline":
@@ -123,6 +137,13 @@ class Engine:
         )
 
     def reconcile(self, recover_unsent=False):
+        # A concurrent execute() may hold the write lock/lookup phases for the
+        # same intent. Serialize whole operations: reconcile must never race a
+        # submit that has persisted "submitting" but has not returned from POST.
+        with self._operation_lock:
+            return self._reconcile(recover_unsent)
+
+    def _reconcile(self, recover_unsent=False):
         results = []
         # Keep the database lock through each lookup. A submit and reconcile must
         # never change the same intent concurrently; failure is isolated per order.
@@ -245,6 +266,10 @@ class Engine:
         return int(time.time() * 1000)
 
     def execute(self, strategy_id):
+        with self._operation_lock:
+            return self._execute(strategy_id)
+
+    def _execute(self, strategy_id):
         self.reconcile()
         strategies = self.store.strategies()
         row = next((r for r in strategies if r["id"] == strategy_id), None)
