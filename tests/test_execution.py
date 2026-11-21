@@ -1,4 +1,6 @@
+import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import replace
 from decimal import Decimal
 
@@ -158,3 +160,50 @@ def test_offline_buy_close_ledger_with_fees_and_pnl(setup_engine, monkeypatch):
     assert closed["quantity"] == pytest.approx(0)
     assert closed["equity"] == pytest.approx(10000 + closed["realized"] - closed["fees"])
     assert not exchange.submissions  # Local accounting never calls the exchange.
+
+
+def test_concurrent_execute_cannot_reconcile_inflight_submit(setup_engine):
+    engine, store, exchange, sid = setup_engine
+    original_locked = store.locked
+    calls = threading.local()
+    at_submit_check = threading.Event()
+    concurrent_done = threading.Event()
+
+    @contextmanager
+    def gated_locked():
+        number = getattr(calls, "n", 0) + 1
+        calls.n = number
+        # Submitter call order: 1 insert reserved, 2 mark submitting, 3 re-check
+        # before POST. Pause at 3 so a concurrent execute() can hit reconcile().
+        if threading.current_thread().name == "submitter" and number == 3:
+            at_submit_check.set()
+            # Pre-fix the concurrent call reaches reconcile() and sets this; with
+            # the operation lock it cannot enter and the bounded wait expires.
+            concurrent_done.wait(timeout=1.0)
+        with original_locked() as db:
+            yield db
+
+    store.locked = gated_locked
+    outcome = {}
+
+    def submit():
+        outcome["submit"] = engine.execute(sid)
+
+    def concurrent():
+        try:
+            outcome["concurrent"] = engine.execute(sid)
+        finally:
+            concurrent_done.set()
+
+    submitter = threading.Thread(target=submit, name="submitter")
+    submitter.start()
+    assert at_submit_check.wait(timeout=5), "submitter never reached the pre-POST check"
+    second = threading.Thread(target=concurrent, name="concurrent")
+    second.start()
+    submitter.join(timeout=5)
+    second.join(timeout=5)
+    assert not submitter.is_alive() and not second.is_alive()
+    assert len(exchange.submissions) == 1
+    assert outcome["submit"]["action"] == "submitted"
+    assert outcome["concurrent"]["action"] == "duplicate"
+    assert len(store.orders(engine.scope)) == 1
