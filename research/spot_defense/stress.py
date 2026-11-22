@@ -16,7 +16,7 @@ SCENARIOS = (
 )
 
 
-def run_stress():
+def run_stress(simulator=simulate):
     output = {}
     start = date(2024, 1, 1)
     end = start + 10 * DAY
@@ -49,7 +49,7 @@ def run_stress():
             market.daily[FX][day] = Bar(fx, 1.0, at(day + DAY))
 
         positions = dict.fromkeys(SYMBOLS, INITIAL * TARGET / 100)
-        ledger, _ = simulate(market, start, end, 60 if high_cost else 20, initial_positions=positions)
+        ledger, _ = simulator(market, start, end, 60 if high_cost else 20, initial_positions=positions)
         previous_cash = INITIAL * (1 - len(SYMBOLS) * TARGET)
         previous_positions = positions
         oracle_nav = [INITIAL]

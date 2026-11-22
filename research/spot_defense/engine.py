@@ -157,6 +157,23 @@ def _cap_excess(weights):
     ]
 
 
+def buy_allocations(portfolio, marks, candidates, cost):
+    """Allocate marked notional and reserve execution drag against both caps."""
+    drag = cost.buy_multiplier - 1
+    target_total = TARGET * len(SYMBOLS)
+    values = {symbol: portfolio.quantity[symbol] * marks.get(symbol, 0.0) for symbol in SYMBOLS}
+    equity = portfolio.equity(marks)
+    post_cost_floor = equity / (1 + drag * target_total)
+    desired = {symbol: max(0, TARGET * post_cost_floor - values[symbol]) for symbol in candidates}
+    capacity = min(
+        (target_total * equity - sum(values.values())) / (1 + target_total * drag),
+        (equity - max(values.values()) / ASSET_CAP) / drag,
+    )
+    requested = sum(desired.values())
+    scale = min(1.0, max(0.0, capacity) / requested) if requested else 0.0
+    return {symbol: scale * notional for symbol, notional in desired.items()}
+
+
 def _execute_exits(portfolio, pending, prices, marks, cost, day, fills, rejected, completed):
     for symbol, (target, since) in list(pending.items()):
         price = prices[symbol]
@@ -284,23 +301,10 @@ def simulate(market: Market, start, end, total_bp, *, initial_positions=None, pa
                 symbol for symbol in check_adds if not blocked and portfolio.weights(opening)[symbol] < TARGET
             ]
             if attempted_adds:
-                # Reserve execution drag and enforce the limits against post-cost NAV.
-                drag = cost.buy_multiplier - 1
-                target_total = TARGET * len(SYMBOLS)
-                values = {symbol: portfolio.quantity[symbol] * prices[symbol] for symbol in SYMBOLS}
-                post_cost_floor = pre / (1 + drag * target_total)
-                desired = {
-                    symbol: max(0, TARGET * post_cost_floor - values[symbol]) for symbol in attempted_adds
-                }
-                capacity = min(
-                    (target_total * pre - sum(values.values())) / (1 + target_total * drag),
-                    (pre - max(values.values()) / ASSET_CAP) / drag,
-                )
-                requested = sum(desired.values())
-                scale = min(1.0, max(0.0, capacity) / requested) if requested else 0.0
+                desired = buy_allocations(portfolio, opening, attempted_adds, cost)
                 for symbol, notional in desired.items():
                     price = prices[symbol]
-                    fill = portfolio.trade(symbol, "buy", scale * notional / price, price, cost)
+                    fill = portfolio.trade(symbol, "buy", notional / price, price, cost)
                     if fill:
                         fills.append(fill)
             if unavailable:
