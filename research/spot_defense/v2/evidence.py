@@ -20,7 +20,9 @@ STATE_SOURCE = {
 TRADE_SOURCE = "okx:trades-all"
 FILES = {"availability.json", "provenance.json", "status.json", "trades.json"}
 LIVE = {**dict.fromkeys(SYMBOLS, "live"), FX: "online"}
-STATES = {"live", "online", "suspend", "offline", "delisted", "preopen", "maintenance", "unknown"}
+NONTRADING = {"suspend", "offline", "delisted", "preopen", "maintenance"}
+MISSING_KINDS = ("daily", "check_state", "execution_state", "trade_feed", "first_trade")
+PROFILES = {"synthetic", "production"}
 
 
 def digest(body):
@@ -134,11 +136,47 @@ class Evidence(Market):
         bar = super().bar(symbol, day, as_of)
         return bar if bar and bar.available < min(as_of, at(day + DAY, CHECK_HOUR)) else None
 
+    def check_state(self, symbol, day):
+        return self.checks.get((day, symbol), "unknown")
+
     def live_at_check(self, symbol, day):
-        return self.checks.get((day, symbol)) == LIVE[symbol]
+        return self.check_state(symbol, day) == LIVE[symbol]
 
     def known_interruption(self, symbol, day, as_of):
-        return not self.live_at_check(symbol, day)
+        return self.check_state(symbol, day) in NONTRADING
+
+    def window_status(self, key):
+        start = at(key[0], EXEC_HOUR)
+        end = at(key[0], EXEC_HOUR + 1)
+        states = self.states.get(key, ())
+        unavailable = [
+            {"state": span.value, "start": span.start.isoformat(), "end": span.end.isoformat()}
+            for span in states
+            if span.value in NONTRADING
+        ]
+        state_complete = _covers(states, start, end) and all(span.value != "unknown" for span in states)
+        feed = self.feeds.get(key, ())
+        feed_complete = bool(feed) and _covers(feed, start, end, value=feed[0].value)
+        return {
+            "verified_nontrading": unavailable,
+            "state_complete": state_complete,
+            "feed_complete": feed_complete,
+        }
+
+    def trade_conflicts(self, key):
+        halted = [span for span in self.states.get(key, ()) if span.value in NONTRADING]
+        return [
+            {
+                "day": str(key[0]),
+                "symbol": key[1],
+                "trade_id": trade.trade_id,
+                "exchange_at": trade.timestamp.isoformat(),
+                "state": span.value,
+            }
+            for trade in sorted(self.trades.get(key, ()), key=lambda item: (item.timestamp, item.trade_id))
+            for span in halted
+            if span.start <= trade.timestamp < span.end
+        ]
 
     def continuous(self, key, through, *, stream=None, require_live=True):
         day, symbol = key
@@ -166,34 +204,46 @@ class Evidence(Market):
         return first
 
     def coverage(self):
-        missing = {"daily": [], "check_state": [], "execution_state": [], "trade_feed": [], "first_trade": []}
+        missing = {kind: [] for kind in MISSING_KINDS}
+        conflicts = []
+        verified_nontrading = []
         for day in days(WARMUP_START, END):
             check = at(day + DAY, CHECK_HOUR)
             for symbol in AVAILABILITY:
                 if not self.bar(symbol, day, check):
                     missing["daily"].append([str(day), symbol])
         for day in days(EVAL_START, END):
-            start, end = at(day, EXEC_HOUR), at(day, EXEC_HOUR + 1)
             for symbol in AVAILABILITY:
                 key = day, symbol
-                if self.checks.get(key, "unknown") == "unknown":
+                if self.check_state(symbol, day) == "unknown":
                     missing["check_state"].append([str(day), symbol])
-                states = self.states.get(key, ())
-                if not _covers(states, start, end) or any(span.value == "unknown" for span in states):
+                window = self.window_status(key)
+                if not window["state_complete"]:
                     missing["execution_state"].append([str(day), symbol])
-                if symbol in SYMBOLS:
-                    # A documented halt or a continuously witnessed quiet market can have no trade.
-                    feed = self.feeds.get(key, ())
-                    if not feed or not _covers(feed, start, end, value=feed[0].value):
-                        missing["trade_feed"].append([str(day), symbol])
-                    observed = self.trades.get(key, ())
-                    if observed and self.first_trade(day, symbol) is None:
-                        first = min(observed, key=lambda item: (item.timestamp, item.received))
-                        if _covers(
-                            states, start, first.received + timedelta(microseconds=1), value=LIVE[symbol]
-                        ):
-                            missing["first_trade"].append([str(day), symbol])
-        return {"bounds": bounds(), "missing": missing, "complete": not any(missing.values())}
+                verified_nontrading.extend(
+                    {"day": str(day), "symbol": symbol, **span} for span in window["verified_nontrading"]
+                )
+                if symbol not in SYMBOLS:
+                    continue
+                if not window["feed_complete"]:
+                    missing["trade_feed"].append([str(day), symbol])
+                conflicts.extend(self.trade_conflicts(key))
+                observed = self.trades.get(key, ())
+                if observed and self.first_trade(day, symbol) is None:
+                    first = min(observed, key=lambda item: (item.timestamp, item.received))
+                    known_block = any(
+                        span.value in NONTRADING and span.start <= first.received
+                        for span in self.states.get(key, ())
+                    )
+                    if not known_block or not window["state_complete"]:
+                        missing["first_trade"].append([str(day), symbol])
+        return {
+            "bounds": bounds(),
+            "missing": missing,
+            "conflicts": conflicts,
+            "verified_nontrading": verified_nontrading,
+            "complete": not (any(missing.values()) or conflicts),
+        }
 
 
 def _clean_file(root, name):
@@ -208,17 +258,25 @@ def inspect_manifest(body, *, expected_hash):
     if digest(body) != checksum(expected_hash):
         raise ValueError("manifest SHA-256 mismatch")
     obj = unpack(body)
-    fields(obj, "schema bounds files missing_counts source_manifest_sha256")
+    fields(obj, "schema profile bounds files missing_counts conflict_count source_manifest_sha256")
     checksum(obj["source_manifest_sha256"])
-    if obj["schema"] != "zlin21-v2-evidence-1" or obj["bounds"] != bounds() or set(obj["files"]) != FILES:
+    if (
+        obj["schema"] != "zlin21-v2-evidence-2"
+        or obj["profile"] not in PROFILES
+        or obj["bounds"] != bounds()
+        or set(obj["files"]) != FILES
+    ):
         raise ValueError("invalid v2 manifest or window")
     for item in obj["files"].values():
         fields(item, "bytes sha256 records")
         if any(type(item[key]) is not int or item[key] < 0 for key in ("bytes", "records")):
             raise ValueError("invalid file size or record count")
         checksum(item["sha256"])
-    fields(obj["missing_counts"], "daily check_state execution_state trade_feed first_trade")
-    if any(type(count) is not int or count < 0 for count in obj["missing_counts"].values()):
+    fields(obj["missing_counts"], " ".join(MISSING_KINDS))
+    if any(
+        type(count) is not int or count < 0
+        for count in (*obj["missing_counts"].values(), obj["conflict_count"])
+    ):
         raise ValueError("invalid coverage count")
     return obj
 
@@ -260,9 +318,10 @@ def _candle(row):
 
 
 def _status(market, row):
-    fields(row, "kind day symbol source start end state response_sha256")
+    fields(row, "kind day symbol source start end state received_at response_sha256")
     day, symbol = _day(row["day"], execution=True), row["symbol"]
     start, end = instant(row["start"]), instant(row["end"])
+    received = instant(row["received_at"])
     state = row["state"]
     checksum(row["response_sha256"])
     key = day, symbol
@@ -272,11 +331,17 @@ def _status(market, row):
         _opaque_id(state)  # stream identifier linked to the custodian's journal
         store = market.feeds
     else:
-        if row["source"] != STATE_SOURCE.get(symbol) or state not in STATES:
+        if row["source"] != STATE_SOURCE.get(symbol) or state not in {
+            LIVE.get(symbol),
+            "unknown",
+            *NONTRADING,
+        }:
             raise ValueError("wrong status source or value")
         if row["kind"] == "check":
-            if not at(day) <= start < at(day, CHECK_HOUR) or end != at(day, CHECK_HOUR):
+            if not at(day) <= received < at(day, CHECK_HOUR) or end != at(day, CHECK_HOUR):
                 raise ValueError("status check was not received before 01:00 UTC")
+            if received != start:
+                raise ValueError("check start does not match the original receipt")
             _record(market.checks, key, state)
             return
         if row["kind"] != "state":
@@ -284,6 +349,8 @@ def _status(market, row):
         store = market.states
     if not at(day, EXEC_HOUR) <= start < end <= at(day, EXEC_HOUR + 1):
         raise ValueError("continuity span outside execution window")
+    if not at(day) <= received <= start:
+        raise ValueError("receipt cannot prove earlier continuity")
     store.setdefault(key, []).append(Span(start, end, state))
 
 
@@ -320,7 +387,42 @@ def _trade(row):
     )
 
 
-def read_evidence(root: Path, manifest):
+def _receipt_key(item):
+    fields(item, "kind symbol source received_at response_sha256")
+    if item["kind"] not in {"check", "state", "feed", "trade", "daily"}:
+        raise ValueError("invalid original receipt kind")
+    if item["symbol"] not in AVAILABILITY:
+        raise ValueError("invalid original receipt instrument")
+    return (
+        item["kind"],
+        item["symbol"],
+        item["source"],
+        instant(item["received_at"]),
+        checksum(item["response_sha256"]),
+    )
+
+
+def original_receipts(body, manifest):
+    if digest(body) != manifest["source_manifest_sha256"]:
+        raise ValueError("original custodian manifest SHA-256 mismatch")
+    obj = unpack(body)
+    fields(obj, "schema profile bounds receipts")
+    if (
+        obj["schema"] != "zlin21-v2-custody-1"
+        or obj["profile"] != manifest["profile"]
+        or obj["bounds"] != bounds()
+    ):
+        raise ValueError("wrong custodian manifest scope")
+    if not isinstance(obj["receipts"], list):
+        raise ValueError("invalid custodian receipt list")
+    result = {_receipt_key(row) for row in obj["receipts"]}
+    if len(result) != len(obj["receipts"]):
+        raise ValueError("duplicate original receipt")
+    return result
+
+
+def read_evidence(root: Path, manifest, source_manifest):
+    original = original_receipts(source_manifest, manifest)
     market = Evidence(listed=frozenset(SYMBOLS))
     body = {}
     for name, entry in manifest["files"].items():
@@ -331,22 +433,25 @@ def read_evidence(root: Path, manifest):
         if not isinstance(rows, list) or len(rows) != entry["records"]:
             raise ValueError(f"evidence record count mismatch: {name}")
         body[name] = rows
-    provenance = set()
-    for item in body["provenance.json"]:
-        fields(item, "source started_at response_sha256")
-        key = item["source"], instant(item["started_at"]), checksum(item["response_sha256"])
-        if key in provenance:
-            raise ValueError("duplicate source receipt")
-        provenance.add(key)
+    provenance = {_receipt_key(item) for item in body["provenance.json"]}
+    if len(provenance) != len(body["provenance.json"]) or not provenance <= original:
+        raise ValueError("normalized receipt index differs from original custodian manifest")
 
-    def require_receipt(row, time_key):
-        if (row["source"], instant(row[time_key]), checksum(row["response_sha256"])) not in provenance:
-            raise ValueError("observation lacks a matching source receipt")
+    def require_receipt(row, kind):
+        key = (
+            kind,
+            row["symbol"],
+            row["source"],
+            instant(row["received_at"]),
+            checksum(row["response_sha256"]),
+        )
+        if key not in provenance:
+            raise ValueError("observation lacks a matching original source receipt")
 
     seen = set()
     for row in body["availability.json"]:
         symbol, day, bar = _candle(row)
-        require_receipt(row, "received_at")
+        require_receipt(row, "daily")
         if bar:
             previous = market.daily[symbol].get(day)
             if previous and previous.available == bar.available and previous != bar:
@@ -355,7 +460,7 @@ def read_evidence(root: Path, manifest):
                 market.daily[symbol][day] = bar
     for row in body["status.json"]:
         _status(market, row)
-        require_receipt(row, "start")
+        require_receipt(row, row["kind"])
     for index in (market.states, market.feeds):
         for spans in index.values():
             spans.sort(key=lambda span: span.start)
@@ -363,7 +468,7 @@ def read_evidence(root: Path, manifest):
                 raise ValueError("overlapping continuity spans")
     for row in body["trades.json"]:
         day, trade = _trade(row)
-        require_receipt(row, "received_at")
+        require_receipt(row, "trade")
         key = trade.symbol, trade.trade_id
         if key in seen:
             raise ValueError("duplicate trade ID")

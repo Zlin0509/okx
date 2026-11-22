@@ -1,16 +1,19 @@
 import copy
 import json
+import os
 import subprocess
 import sys
 from datetime import date, timedelta
+from pathlib import Path
 
 import pytest
 
 from research.spot_defense.data import FX
 from research.spot_defense.engine import Portfolio
 from research.spot_defense.protocol import DAY, SYMBOLS, at, days
+from research.spot_defense.run import write_json
 from research.spot_defense.stress import run_stress
-from research.spot_defense.v2 import gate
+from research.spot_defense.v2 import gate, launcher
 from research.spot_defense.v2.calendar import (
     END,
     EVAL_START,
@@ -34,7 +37,7 @@ from research.spot_defense.v2.evidence import (
     read_evidence,
 )
 from research.spot_defense.v2.replay import simulate, synthetic_replay
-from research.spot_defense.v2.run import evaluate, review
+from research.spot_defense.v2.run import _assess, evaluate, review
 
 BTC, ETH = SYMBOLS
 DAY0 = EVAL_START  # Monday
@@ -63,7 +66,7 @@ def _candle_row(day, symbol, close, *, delay=3599, confirm="1"):
     }
 
 
-def _status_row(day, symbol, kind, state=None, *, start=None, end=None):
+def _status_row(day, symbol, kind, state=None, *, start=None, end=None, received=None):
     if kind == "check":
         start = at(day, 1) - timedelta(seconds=1) if start is None else start
         end = at(day, 1)
@@ -77,6 +80,7 @@ def _status_row(day, symbol, kind, state=None, *, start=None, end=None):
         "source": TRADE_SOURCE if kind == "feed" else STATE_SOURCE[symbol],
         "start": _z(start),
         "end": _z(end),
+        "received_at": _z(start if received is None else received),
         "state": state or (symbol if kind == "feed" else LIVE[symbol]),
         "response_sha256": AUDIT_HASH,
     }
@@ -119,30 +123,58 @@ def _inputs(end=DAY0 + DAY):
     return {"availability.json": candles, "status.json": states, "trades.json": trades}
 
 
-def _pack(root, inputs, *, counts=None, receipts=True):
+def _pack(root, inputs, *, counts=None, receipts=True, original=None, conflicts=0, profile="synthetic"):
     files = copy.deepcopy(inputs)
+    kinds = {"availability.json": "daily", "trades.json": "trade"}
     receipts_from_rows = {
-        (row["source"], row.get("received_at", row.get("start")), row["response_sha256"])
-        for rows in files.values()
+        (
+            row.get("kind", kinds.get(name)),
+            row["symbol"],
+            row["source"],
+            row["received_at"],
+            row["response_sha256"],
+        )
+        for name, rows in files.items()
         for row in rows
     }
     files["provenance.json"] = (
         [
-            {"source": source, "started_at": received, "response_sha256": sha}
-            for source, received, sha in sorted(receipts_from_rows)
+            {
+                "kind": kind,
+                "symbol": symbol,
+                "source": source,
+                "received_at": received,
+                "response_sha256": sha,
+            }
+            for kind, symbol, source, received, sha in sorted(receipts_from_rows)
         ]
         if receipts
         else []
     )
+    root.mkdir(exist_ok=True)
+    custody = (
+        original
+        if original is not None
+        else gate.report_bytes(
+            {
+                "schema": "zlin21-v2-custody-1",
+                "profile": profile,
+                "bounds": bounds(),
+                "receipts": files["provenance.json"],
+            }
+        )
+    )
+    (root / "original-custody.json").write_bytes(custody)
     manifest = {
-        "schema": "zlin21-v2-evidence-1",
+        "schema": "zlin21-v2-evidence-2",
+        "profile": profile,
         "bounds": bounds(),
         "files": {},
-        "source_manifest_sha256": AUDIT_HASH,
+        "source_manifest_sha256": digest(custody),
         "missing_counts": counts or dict.fromkeys(KINDS, 0),
+        "conflict_count": conflicts,
     }
     assert set(files) == FILES
-    root.mkdir(exist_ok=True)
     for name, rows in files.items():
         body = gate.report_bytes(rows)
         (root / name).write_bytes(body)
@@ -152,9 +184,13 @@ def _pack(root, inputs, *, counts=None, receipts=True):
     return body, inspect_manifest(body, expected_hash=digest(body))
 
 
+def _custody(root):
+    return (root / "original-custody.json").read_bytes()
+
+
 def _read(tmp_path, inputs):
     _, manifest = _pack(tmp_path, inputs)
-    return read_evidence(tmp_path, manifest)
+    return read_evidence(tmp_path, manifest, _custody(tmp_path))
 
 
 def _row(market, **kw):
@@ -314,10 +350,10 @@ def test_source_receipts_and_manifest_hashes_are_required(tmp_path):
     with pytest.raises(ValueError, match="manifest SHA"):
         inspect_manifest(body, expected_hash=AUDIT_HASH)
     with pytest.raises(ValueError, match="source receipt"):
-        read_evidence(tmp_path, manifest)
+        read_evidence(tmp_path, manifest, _custody(tmp_path))
     (tmp_path / "trades.json").write_bytes(b"tampered")
     with pytest.raises(ValueError, match="evidence checksum"):
-        read_evidence(tmp_path, manifest)
+        read_evidence(tmp_path, manifest, _custody(tmp_path))
     row = _status_row(DAY0, BTC, "check", start=at(DAY0, 1))
     with pytest.raises(ValueError, match="before 01"):
         _status(None, row)
@@ -340,15 +376,45 @@ def authority(tmp_path):
     subprocess.run(["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(private)], check=True)
     subprocess.run(["openssl", "pkey", "-in", str(private), "-pubout", "-out", str(public)], check=True)
     state = tmp_path / "state"
-    state.mkdir()
+    state.mkdir(mode=0o700)
+    python = Path("/usr/bin/python3").resolve()
+    key = public.read_bytes()
+    config = {
+        "schema": 1,
+        "profile": "synthetic",
+        "reviewer_id": "synthetic-reviewer",
+        "reviewer_public_key": key.decode("ascii"),
+        "reviewer_key_sha256": digest(key),
+        "revision": "a" * 40,
+        "implementation_sha256": gate.source_sha256(),
+        "commands_sha256": gate.command_sha256(),
+        "launcher_sha256": digest(launcher.SCRIPT.read_bytes()),
+        "verifier_path": str(launcher.VERIFIER),
+        "verifier_sha256": digest(launcher.VERIFIER.read_bytes()),
+        "verifier_version": subprocess.check_output(
+            [str(launcher.VERIFIER), "version"], text=True, env=launcher.VERIFIER_ENV
+        ).rstrip("\n"),
+        "python_path": str(python),
+        "python_sha256": digest(python.read_bytes()),
+        "state_directory": str(state),
+        "state_uid": os.geteuid(),
+        "research_uid": None,
+        "synthetic_now": _z(at(END, 2)),
+    }
+    body = gate.report_bytes(config)
+    path = tmp_path / "synthetic-authority.json"
+    path.write_bytes(body)
     identity = gate.ReviewAuthority(
-        "synthetic-reviewer",
-        public.read_bytes(),
-        digest(public.read_bytes()),
-        "a" * 40,
+        config["reviewer_id"],
+        key,
+        digest(key),
+        config["revision"],
         gate.source_sha256(),
         gate.command_sha256(),
         state,
+        "synthetic",
+        digest(body),
+        launcher.VERIFIER,
     )
 
     def sign(body):
@@ -381,6 +447,8 @@ def _cert(identity, manifest_hash, audit, *, kind="isolation", **extra):
         {
             "schema": 1,
             "kind": kind,
+            "profile": identity.profile,
+            "authority_sha256": identity.binding_sha256,
             "reviewer_id": identity.reviewer_id,
             "issued_at": _z(at(END, 1)),
             "prereg_sha256": PREREG_SHA256,
@@ -397,7 +465,7 @@ def _cert(identity, manifest_hash, audit, *, kind="isolation", **extra):
 
 def test_default_review_refuses_to_read_anything_and_inspect_only_reads_manifest(tmp_path):
     command = [sys.executable, "-m", "research.spot_defense.v2.run"]
-    denied = subprocess.run([*command, "review", *["absent"] * 4], capture_output=True)
+    denied = subprocess.run([*command, "review", *["absent"] * 5], capture_output=True)
     assert denied.returncode == 2
     assert b"authority has not been frozen" in denied.stderr
     body, manifest = _pack(tmp_path, _inputs())
@@ -436,12 +504,18 @@ def test_authorized_review_then_single_synthetic_evaluation(tmp_path, authority)
     audit = _audit()
     iso = _cert(identity, digest(manifest), audit)
     only_review = gate.authorize(identity, at(END, 2), iso, sign(iso), audit)
-    result = review(snapshot, only_review)
+    result = review(snapshot, _custody(snapshot), only_review)
     assert result["coverage"]["complete"]
-    assert set(result) == {"manifest_sha256", "isolation_sha256", "coverage"}
+    assert set(result) == {
+        "manifest_sha256",
+        "authority_sha256",
+        "source_manifest_sha256",
+        "isolation_sha256",
+        "coverage",
+    }
     assert not any(identity.state_directory.iterdir())
     with pytest.raises(ValueError, match="release approval"):
-        evaluate(snapshot, only_review)
+        evaluate(snapshot, _custody(snapshot), only_review)
     bad = _cert(
         identity,
         digest(manifest),
@@ -454,7 +528,7 @@ def test_authorized_review_then_single_synthetic_evaluation(tmp_path, authority)
         identity, at(END, 2), iso, sign(iso), audit, release=bad, release_signature=sign(bad)
     )
     with pytest.raises(ValueError, match="differs from signed review"):
-        evaluate(snapshot, approval)
+        evaluate(snapshot, _custody(snapshot), approval)
     release = _cert(
         identity,
         digest(manifest),
@@ -466,11 +540,11 @@ def test_authorized_review_then_single_synthetic_evaluation(tmp_path, authority)
     approval = gate.authorize(
         identity, at(END, 2), iso, sign(iso), audit, release=release, release_signature=sign(release)
     )
-    final = evaluate(snapshot, approval)
+    final = evaluate(snapshot, _custody(snapshot), approval)
     assert set(final["by_cost_bp"]) == {20, 40, 60}
     assert final["stress_protections_passed"]
     with pytest.raises(FileExistsError):
-        evaluate(snapshot, approval)
+        evaluate(snapshot, _custody(snapshot), approval)
 
 
 def test_signed_coverage_claim_cannot_override_actual_gap(tmp_path, authority):
@@ -483,4 +557,271 @@ def test_signed_coverage_claim_cannot_override_actual_gap(tmp_path, authority):
     iso = _cert(identity, digest(manifest), audit)
     approved = gate.authorize(identity, at(END, 2), iso, sign(iso), audit)
     with pytest.raises(ValueError, match="actual coverage"):
-        review(audited, approved)
+        review(audited, _custody(audited), approved)
+
+
+def test_check_receipt_timing_and_cannot_backdate(tmp_path):
+    timely = _status_row(DAY0, BTC, "check")
+    assert _read(tmp_path, _inputs()).live_at_check(BTC, DAY0)
+    for late in (at(DAY0, 1), at(DAY0, 1) + timedelta(microseconds=1)):
+        with pytest.raises(ValueError, match="before 01"):
+            _status(None, timely | {"received_at": _z(late)})
+    with pytest.raises(ValueError, match="does not match the original"):
+        _status(None, timely | {"start": _z(at(DAY0))})
+
+
+@pytest.mark.parametrize("kind", ["state", "feed"])
+def test_late_continuity_receipt_is_rejected(tmp_path, kind):
+    late = _status_row(DAY0, BTC, kind, received=at(DAY0, 2) + timedelta(microseconds=1))
+    rows = _inputs()
+    rows["status.json"].append(late)
+    with pytest.raises(ValueError, match="cannot prove earlier continuity"):
+        _read(tmp_path, rows)
+
+
+def test_original_custody_receipts_bind_kind_time_and_hash(tmp_path):
+    rows = _inputs()
+    _, manifest = _pack(tmp_path, rows)
+    original = _custody(tmp_path)
+    with pytest.raises(ValueError, match="original custodian manifest SHA"):
+        read_evidence(tmp_path, manifest, original + b" ")
+    target = next(row for row in rows["status.json"] if row["kind"] == "feed")
+    for field, value in (
+        ("received_at", _z(at(DAY0, 2) - timedelta(seconds=1))),
+        ("response_sha256", "b" * 64),
+    ):
+        changed = copy.deepcopy(rows)
+        next(row for row in changed["status.json"] if row == target)[field] = value
+        _, declared = _pack(tmp_path, changed, original=original)
+        with pytest.raises(ValueError, match="differs from original custodian"):
+            read_evidence(tmp_path, declared, original)
+
+
+def _halt_then_reopen(inputs):
+    states = inputs["status.json"]
+    states[:] = [
+        row
+        for row in states
+        if not (row["day"] == str(DAY0) and row["symbol"] == BTC and row["kind"] == "state")
+    ]
+    start = at(DAY0, 2) + timedelta(seconds=2)
+    end = at(DAY0, 2) + timedelta(seconds=4)
+    states.extend(
+        [
+            _status_row(DAY0, BTC, "state", end=start),
+            _status_row(DAY0, BTC, "state", "suspend", start=start, end=end),
+            _status_row(DAY0, BTC, "state", start=end),
+        ]
+    )
+
+
+def test_later_trade_during_halt_conflicts_even_if_received_after_reopen(tmp_path, authority):
+    identity, sign = authority
+    rows = _inputs(END)
+    _halt_then_reopen(rows)
+    conflicting = _trade_row(DAY0, BTC, 100, offset=3, receipt=6)
+    rows["trades.json"].append(conflicting)
+    body, _ = _pack(tmp_path, rows, conflicts=1)
+    audit = _audit()
+    iso = _cert(identity, digest(body), audit)
+    approved = gate.authorize(identity, at(END, 2), iso, sign(iso), audit)
+    result = review(tmp_path, _custody(tmp_path), approved)
+    coverage = result["coverage"]
+    assert not coverage["complete"]
+    assert not any(coverage["missing"].values())
+    assert coverage["conflicts"] == [
+        {
+            "day": str(DAY0),
+            "symbol": BTC,
+            "trade_id": conflicting["frame"]["data"][0]["tradeId"],
+            "exchange_at": at(DAY0, 2).replace(second=3).isoformat(),
+            "state": "suspend",
+        }
+    ]
+    release = _cert(
+        identity,
+        digest(body),
+        audit,
+        kind="release",
+        isolation_sha256=digest(iso),
+        review_sha256=digest(gate.report_bytes(result)),
+    )
+    approved = gate.authorize(
+        identity, at(END, 2), iso, sign(iso), audit, release=release, release_signature=sign(release)
+    )
+    with pytest.raises(ValueError, match="coverage is incomplete"):
+        evaluate(tmp_path, _custody(tmp_path), approved)
+    assert not any(identity.state_directory.iterdir())
+
+
+def test_verified_halt_with_no_trade_is_not_missing_coverage(tmp_path):
+    rows = _inputs(END)
+    for row in rows["status.json"]:
+        if row["day"] == str(DAY0) and row["symbol"] == BTC and row["kind"] in ("check", "state"):
+            row["state"] = "suspend"
+    rows["trades.json"] = [
+        row for row in rows["trades.json"] if (row["day"], row["symbol"]) != (str(DAY0), BTC)
+    ]
+    market = _read(tmp_path, rows)
+    assert market.coverage()["complete"]
+    row = _row(market, initial=Portfolio(8750, {BTC: 12.5, ETH: 0.0}))
+    assert row["signals"][BTC]["known_interruption"]
+    assert row["rejected"][0]["reason"] == "verified_nontrading_interval"
+    assert row["execution_window_evidence"][BTC]["state_complete"]
+    rows["status.json"] = [
+        row
+        for row in rows["status.json"]
+        if not (row["day"] == str(DAY0) and row["symbol"] == BTC and row["kind"] in ("check", "state"))
+    ]
+    row = _row(_read(tmp_path, rows), initial=Portfolio(8750, {BTC: 12.5, ETH: 0.0}))
+    assert not row["signals"][BTC]["known_interruption"]
+    assert row["rejected"][0]["reason"] == "market_or_state_evidence_gap"
+
+
+@pytest.mark.parametrize("gap", ["offline_check", "missing_close", "window"])
+def test_passive_requires_fx_evidence(tmp_path, gap):
+    rows = _inputs()
+    if gap == "missing_close":
+        rows["availability.json"] = [
+            row for row in rows["availability.json"] if (row["day"], row["symbol"]) != (str(DAY0 - DAY), FX)
+        ]
+    else:
+        for row in rows["status.json"]:
+            if row["symbol"] == FX and row["kind"] == ("check" if gap == "offline_check" else "state"):
+                row["state"] = "offline"
+    assert not _row(_read(tmp_path, rows), passive=True)["fills"]
+
+
+def test_stale_valuation_suspected_exposure_and_unpriced_zero_leg(tmp_path):
+    rows = _inputs()
+    good = _read(tmp_path, rows)
+    passive = [_row(good, passive=True)]
+    rows["trades.json"] = [row for row in rows["trades.json"] if row["symbol"] != BTC]
+    market = _read(tmp_path, rows)
+    empty_leg = _row(market)
+    assert empty_leg["exposure_measured"]
+    assert not empty_leg["execution_valuation_stale_assets"]
+    hold = _row(market, initial=Portfolio(5000, {BTC: 50, ETH: 0.0}))
+    assert not hold["exposure_measured"]
+    assert hold["execution_valuation_stale_assets"] == [BTC]
+    result = _assess([hold], 10_000, passive, True)
+    assert result["acceptance"] == "insufficient_evidence"
+    assert result["post_exposure_breaches_stale"] == [str(DAY0)]
+    assert result["event_exposure_suspected_stale_days"] == [str(DAY0)]
+
+
+def test_canonical_v1_stress_artifact_matches_original_delivery(tmp_path):
+    output = tmp_path / "stress.json"
+    write_json(output, run_stress())
+    assert digest(output.read_bytes()) == "5fe4af89a0562b80fc4d4d39795284f023546e59718e353269f7674bfde9fd24"
+
+
+def _launch(*args):
+    command = ["/usr/bin/python3", "-I", "-B", str(launcher.SCRIPT)]
+    return subprocess.run([*command, *map(str, args)], capture_output=True, timeout=20)
+
+
+def _fixture_file(root, name, body):
+    path = root / name
+    path.write_bytes(body)
+    return path
+
+
+def test_real_cli_approval_binding_and_one_use(tmp_path, authority):
+    identity, sign = authority
+    config = tmp_path / "synthetic-authority.json"
+    root = tmp_path / "fixture"
+    manifest, _ = _pack(root, _inputs(END))
+    audit = _audit()
+    iso = _cert(identity, digest(manifest), audit)
+    args = [
+        root,
+        root / "original-custody.json",
+        _fixture_file(tmp_path, "iso.json", iso),
+        _fixture_file(tmp_path, "iso.sig", sign(iso)),
+        _fixture_file(tmp_path, "audit.json", audit),
+    ]
+    trusted = ["--synthetic", config, identity.binding_sha256]
+
+    production = _launch("review", *args)
+    assert production.returncode == 2
+    assert any(
+        message in production.stderr
+        for message in (
+            b"production trust root has not been provisioned",
+            b"outside the provisioned installation",
+        )
+    )
+    identity.state_directory.chmod(0o770)
+    try:
+        wrong_permissions = _launch(*trusted, "review", *args)
+        assert wrong_permissions.returncode == 2
+        assert b"private to the evaluation account" in wrong_permissions.stderr
+    finally:
+        identity.state_directory.chmod(0o700)
+    unknown = _launch("--synthetic", config, AUDIT_HASH, "review", *args)
+    assert unknown.returncode == 2
+    assert b"trusted pin" in unknown.stderr
+    altered = json.loads(config.read_bytes())
+    altered["verifier_version"] = "unbound verifier"
+    altered_body = gate.report_bytes(altered)
+    altered_path = _fixture_file(tmp_path, "alternate-authority.json", altered_body)
+    bad_verifier = _launch("--synthetic", altered_path, digest(altered_body), "review", *args)
+    assert bad_verifier.returncode == 2
+    assert b"verifier version differs" in bad_verifier.stderr
+
+    alternate = tmp_path / "alternate-state"
+    alternate.mkdir(mode=0o700)
+    altered = json.loads(config.read_bytes()) | {"state_directory": str(alternate)}
+    altered_body = gate.report_bytes(altered)
+    altered_path.write_bytes(altered_body)
+    wrong_scope = _launch("--synthetic", altered_path, digest(altered_body), "review", *args)
+    assert wrong_scope.returncode == 2
+    assert b"approval scope" in wrong_scope.stderr
+
+    reviewed = _launch(*trusted, "review", *args)
+    assert reviewed.returncode == 0, reviewed.stderr
+    report = json.loads(reviewed.stdout)
+    assert report["coverage"]["complete"]
+    assert report["authority_sha256"] == identity.binding_sha256
+    assert not any(identity.state_directory.iterdir())
+    release = _cert(
+        identity,
+        digest(manifest),
+        audit,
+        kind="release",
+        isolation_sha256=digest(iso),
+        review_sha256=digest(gate.report_bytes(report)),
+    )
+    args.extend(
+        [
+            _fixture_file(tmp_path, "release.json", release),
+            _fixture_file(tmp_path, "release.sig", sign(release)),
+        ]
+    )
+    result = _launch(*trusted, "evaluate", *args)
+    assert result.returncode == 0, result.stderr
+    assert set(json.loads(result.stdout)["by_cost_bp"]) == {"20", "40", "60"}
+    second = _launch(*trusted, "evaluate", *args)
+    assert second.returncode == 2 and b"evaluation already claimed" in second.stderr
+    assert not any(alternate.iterdir())
+
+
+def test_synthetic_launcher_refuses_production_profile(tmp_path, authority):
+    identity, sign = authority
+    root = tmp_path / "fixture"
+    body, _ = _pack(root, _inputs(), profile="production")
+    audit = _audit()
+    iso = _cert(identity, digest(body), audit)
+    denied = _launch(
+        "--synthetic",
+        tmp_path / "synthetic-authority.json",
+        identity.binding_sha256,
+        "review",
+        root,
+        root / "original-custody.json",
+        _fixture_file(tmp_path, "iso.json", iso),
+        _fixture_file(tmp_path, "iso.sig", sign(iso)),
+        _fixture_file(tmp_path, "audit.json", audit),
+    )
+    assert denied.returncode == 2 and b"evidence profile" in denied.stderr

@@ -1,5 +1,6 @@
 {
   "inspect": "python3 -m research.spot_defense.v2.run inspect MANIFEST MANIFEST_SHA256",
-  "review": "python3 -m research.spot_defense.v2.run review EVIDENCE ISOLATION ISOLATION_SIGNATURE AUDIT",
-  "evaluate": "python3 -m research.spot_defense.v2.run evaluate EVIDENCE ISOLATION ISOLATION_SIGNATURE AUDIT RELEASE RELEASE_SIGNATURE"
+  "review": "/usr/bin/env -i /usr/bin/python3 -I -B /opt/zlin21/v2/research/spot_defense/v2/launcher.py review EVIDENCE ORIGINAL_CUSTODY_MANIFEST ISOLATION ISOLATION_SIGNATURE AUDIT",
+  "evaluate": "/usr/bin/env -i /usr/bin/python3 -I -B /opt/zlin21/v2/research/spot_defense/v2/launcher.py evaluate EVIDENCE ORIGINAL_CUSTODY_MANIFEST ISOLATION ISOLATION_SIGNATURE AUDIT RELEASE RELEASE_SIGNATURE",
+  "synthetic": "/usr/bin/python3 -I -B research/spot_defense/v2/launcher.py --synthetic AUTHORITY AUTHORITY_SHA256 MODE ARGS"
 }

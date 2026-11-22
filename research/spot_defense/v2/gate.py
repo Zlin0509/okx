@@ -23,17 +23,16 @@ class ReviewAuthority:
     implementation_sha256: str
     commands_sha256: str
     state_directory: Path
-
-
-# An independent launcher must pin this authority in the supplemental freeze.
-# No CLI flag can install trust or alter the current clock.
-AUTHORITY: ReviewAuthority | None = None
+    profile: str
+    binding_sha256: str
+    verifier: Path
 
 
 def source_sha256():
     folder = Path(__file__).resolve().parent
     sources = [
         *folder.glob("*.py"),
+        folder / "README.md",
         *(
             folder.parent / name
             for name in (
@@ -65,7 +64,7 @@ def _verify(authority, body, signature):
         (root / "signature").write_bytes(signature)
         result = subprocess.run(
             [
-                "openssl",
+                str(authority.verifier),
                 "pkeyutl",
                 "-verify",
                 "-pubin",
@@ -78,6 +77,7 @@ def _verify(authority, body, signature):
                 str(root / "signature"),
             ],
             capture_output=True,
+            env={"LC_ALL": "C", "OPENSSL_CONF": "/dev/null"},
             timeout=10,
             check=False,
         )
@@ -85,7 +85,7 @@ def _verify(authority, body, signature):
         raise ValueError("invalid independent approval signature")
 
 
-COMMON = "schema kind reviewer_id issued_at prereg_sha256 config_sha256 revision implementation_sha256 commands_sha256 manifest_sha256 audit_sha256"
+COMMON = "schema kind profile authority_sha256 reviewer_id issued_at prereg_sha256 config_sha256 revision implementation_sha256 commands_sha256 manifest_sha256 audit_sha256"
 
 
 def _approval(authority, body, signature, kind, now):
@@ -98,6 +98,8 @@ def _approval(authority, body, signature, kind, now):
         type(obj["schema"]) is not int
         or obj["schema"] != 1
         or obj["kind"] != kind
+        or obj["profile"] != authority.profile
+        or obj["authority_sha256"] != authority.binding_sha256
         or obj["reviewer_id"] != authority.reviewer_id
         or obj["prereg_sha256"] != PREREG_SHA256
         or obj["config_sha256"] != V1_CONFIG_SHA256
@@ -107,7 +109,7 @@ def _approval(authority, body, signature, kind, now):
         or not at(END, CHECK_HOUR) <= issued <= now
     ):
         raise ValueError("approval scope, identity or date mismatch")
-    for key in ("manifest_sha256", "audit_sha256", *release_fields.split()):
+    for key in ("manifest_sha256", "audit_sha256", "authority_sha256", *release_fields.split()):
         checksum(obj[key])
     return obj
 
@@ -169,15 +171,19 @@ def authorize(
     return Approval(authority, isolated["manifest_sha256"], isolation_hash, approved["review_sha256"])
 
 
-def validated_market(root, approval):
+def validated_market(root, source_manifest, approval):
     manifest = inspect_manifest((root / "manifest.json").read_bytes(), expected_hash=approval.manifest_sha256)
-    market = read_evidence(root, manifest)
+    if manifest["profile"] != approval.authority.profile:
+        raise ValueError("evidence profile does not match the authority")
+    market = read_evidence(root, manifest, source_manifest)
     coverage = market.coverage()
     counts = {key: len(missing) for key, missing in coverage["missing"].items()}
-    if counts != manifest["missing_counts"]:
+    if counts != manifest["missing_counts"] or len(coverage["conflicts"]) != manifest["conflict_count"]:
         raise ValueError("actual coverage differs from the published manifest")
     return market, {
         "manifest_sha256": approval.manifest_sha256,
+        "source_manifest_sha256": manifest["source_manifest_sha256"],
+        "authority_sha256": approval.authority.binding_sha256,
         "isolation_sha256": approval.isolation_sha256,
         "coverage": coverage,
     }

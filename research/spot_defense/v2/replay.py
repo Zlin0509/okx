@@ -15,8 +15,14 @@ def _checks(market, day, marks, last_fx):
     for symbol in SYMBOLS:
         if bar := market.bar(symbol, day - DAY, check):
             marks[symbol] = bar.close
-    if not market.live_at_check(FX, day):
-        stale.append("fx_status")
+    for symbol in (*SYMBOLS, FX):
+        state = market.check_state(symbol, day)
+        if symbol in SYMBOLS:
+            diagnostics[symbol]["check_state"] = state
+            if state == "unknown":
+                active[symbol] = diagnostics[symbol]["eligible"] = False
+        if state == "unknown" or (symbol == FX and not market.live_at_check(FX, day)):
+            stale.append(f"{symbol}:status")
     bar = market.bar(FX, day - DAY, check)
     return active, stale, depeg, diagnostics, bar.close if bar else last_fx
 
@@ -69,6 +75,20 @@ def _additions_allowed(market, day, tick, portfolio, observed):
     ) and market.continuous((day, FX), tick.received)
 
 
+def _stale_assets(portfolio, observed):
+    return [symbol for symbol in SYMBOLS if portfolio.quantity[symbol] and symbol not in observed]
+
+
+def _unfilled_reason(window, already_observed):
+    if already_observed:
+        return "first_trade_already_passed"
+    if not window["state_complete"] or not window["feed_complete"]:
+        return "market_or_state_evidence_gap"
+    if window["verified_nontrading"]:
+        return "verified_nontrading_interval"
+    return "no_usable_trade_in_verified_feed"
+
+
 def simulate(market, total_bp, *, passive=False, start=EVAL_START, end=END, initial=None):
     portfolio = initial if initial is not None else Portfolio()
     cost = Cost(total_bp)
@@ -98,7 +118,12 @@ def simulate(market, total_bp, *, passive=False, start=EVAL_START, end=END, init
         candidates = [
             symbol for symbol in SYMBOLS if active[symbol] and day.weekday() == 0 and not (stale or depeg)
         ]
-        passive_start = passive and not passive_filled and all(market.live_at_check(s, day) for s in SYMBOLS)
+        passive_start = (
+            passive
+            and not passive_filled
+            and FX not in stale
+            and all(market.live_at_check(s, day) for s in (*SYMBOLS, FX))
+        )
         fills, rejected, completions, events = [], [], [], []
         prices = dict.fromkeys(SYMBOLS)
         observed = set()
@@ -121,7 +146,7 @@ def simulate(market, total_bp, *, passive=False, start=EVAL_START, end=END, init
             if passive_start:
                 # Both legs are committed in advance with independent half cash budgets.
                 for symbol, item in batch.items():
-                    if all(market.continuous((day, s), item.received) for s in SYMBOLS):
+                    if all(market.continuous((day, s), item.received) for s in (*SYMBOLS, FX)):
                         quantity = (INITIAL / len(SYMBOLS)) / cost.buy_multiplier / item.price
                         if fill := portfolio.trade(symbol, "buy", quantity, item.price, cost):
                             fills.append(_fill_metadata(fill, item))
@@ -144,31 +169,34 @@ def simulate(market, total_bp, *, passive=False, start=EVAL_START, end=END, init
                         {"symbol": symbol, "side": "buy", "reason": "unverified_current_marks_or_status"}
                         for symbol in eligible
                     )
-            measured = all(not portfolio.quantity[symbol] or symbol in observed for symbol in SYMBOLS)
+            stale_assets = _stale_assets(portfolio, observed)
+            weights = portfolio.weights(marks)
             events.append(
                 {
                     "received_at": tick.received.isoformat(),
                     "exchange_at": tick.timestamp.isoformat(),
                     "symbols": sorted(batch),
-                    "valuation_measured": measured,
-                    "weights": portfolio.weights(marks),
-                    "cap_excess": _cap_excess(portfolio.weights(marks)),
+                    "valuation_measured": not stale_assets,
+                    "stale_assets": stale_assets,
+                    "weights": weights,
+                    "cap_excess": _cap_excess(weights),
                 }
             )
         if passive_start and passive_filled and len(passive_filled) != len(SYMBOLS):
             passive_incomplete = True
+        window = {symbol: market.window_status((day, symbol)) for symbol in (*SYMBOLS, FX)}
         if not passive:
             rejected.extend(
                 {
                     "symbol": symbol,
                     "side": "sell",
-                    "reason": "no_remaining_proven_first_trade",
+                    "reason": _unfilled_reason(window[symbol], symbol in observed),
                     "first_intent": since.isoformat(),
                 }
                 for symbol, (_, since) in pending.items()
             )
             rejected.extend(
-                {"symbol": symbol, "side": "buy", "reason": "no_proven_first_trade"}
+                {"symbol": symbol, "side": "buy", "reason": _unfilled_reason(window[symbol], False)}
                 for symbol in candidates
                 if symbol not in observed and not risk_day
             )
@@ -206,6 +234,10 @@ def simulate(market, total_bp, *, passive=False, start=EVAL_START, end=END, init
                     "rejected": rejected,
                     "exit_completions": completions,
                     "execution_events": events,
+                    "execution_window_evidence": window,
+                    "fx_check_state": market.check_state(FX, day),
+                    "exposure_measured": not _stale_assets(portfolio, observed),
+                    "execution_valuation_stale_assets": _stale_assets(portfolio, observed),
                     "risk_trims": sorted(caps),
                     "passive_incomplete": passive_incomplete,
                     "pending_exits": {

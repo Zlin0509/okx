@@ -1,6 +1,6 @@
 # ZLIN-21 v2 离线候选
 
-基线为 `22a690c367cc2465251fff252d088e1ec17734b8`。v2 使用原策略的日线信号、成本、目标、风险阈值以及六项合成压力路径。日历和证据规则由本目录管理。
+v2 沿用 `22a690c367cc2465251fff252d088e1ec17734b8` 的日线信号、成本、目标、风险阈值和六项合成压力路径。
 
 | 区间 | UTC，含起点、排除终点 | 用途 |
 | --- | --- | --- |
@@ -8,42 +8,52 @@
 | 预热 | 2026-12-03 至 2027-02-01 | 日线信号预热 |
 | 评估 | 2027-02-01 至 2028-02-01 | 经独立批准后一次性离线评估 |
 
-涉及数据的日期检查以日线桶开始时间和成交所报交易时点为准。最后一个评估日的收盘日线可以在 2028-02-01 00:00 后、01:00 前收到。日线、成交和状态的归一化记录均检查日期与附带时钟。整个受保护区间含预热。
+行情日期按日线桶开始时刻及交易所成交时刻校验。**预热与评估共 425 天逐日存证。** 自 2026-12-03 起，每个 UTC 日的完整日线均须在其收盘后、次日 01:00 之前收到。预热结束后一次补抓 60 天不能证明可用性。最后一个评估日的收盘日线仍须在 2028-02-01 01:00 之前收到。
 
-## 证据清单
+## 证据清单与原档比对
 
-`manifest.json` 是审核前可见的清单。它包含 `schema=zlin21-v2-evidence-1`、`bounds`（三个冻结 UTC 区间）、`source_manifest_sha256`（托管端原始档案清单的哈希）、`files`（以下每个文件的 `bytes`、`records`、`sha256`）、`missing_counts`（`daily`、`check_state`、`execution_state`、`trade_feed`、`first_trade`）。发布的清单 SHA-256 应通过独立渠道登记。
+公开 `manifest.json` 包含 `schema=zlin21-v2-evidence-2`、`profile`、`bounds`、`source_manifest_sha256`、`files`（每个文件的 `bytes`、`records`、`sha256`）、`missing_counts`（`daily`、`check_state`、`execution_state`、`trade_feed`、`first_trade`）和 `conflict_count`。清单 SHA-256 由独立渠道登记。
 
-托管端的归一化文件均为 JSON 数组。日期为 YYYY-MM-DD，时钟为 UTC，时间戳以 `Z` 结束；精度最高为微秒。
+受控复核接收托管方的原始清单元数据文件。该文件包含 `schema=zlin21-v2-custody-1`、同一 `profile` 和 `bounds`、原始回执列表 `receipts`。逐字节计算其 SHA-256，与已签归一化清单引用的哈希比对后再读归一化载荷。回执及归一化文件字段如下。
 
 | 文件 | 每行字段 |
 | --- | --- |
-| `availability.json` | `symbol day source received_at response_sha256 candle`。保留对应 OKX `1Dutc` 九字段或 Coinbase 86400 秒六字段日线。 |
-| `trades.json` | `symbol day source received_at stream response_sha256 frame`。保留相同标的的 OKX `trades-all` 单笔原始消息字段、逐笔 ID、成交 UTC 和价格。 |
-| `status.json` | `kind day symbol source start end state response_sha256`。以 `check` 记录 01:00 前收到并适用当次检查的状态，以 `state` 记录 02:00–03:00 的有效状态区间，以 `feed` 记录经核实的连续采集区间（`state` 字段为流 ID）。 |
-| `provenance.json` | `source started_at response_sha256`。每条归一化记录均须匹配回执。日线与成交使用接收时刻，状态与连续区间使用覆盖起点。 |
+| `availability.json` | `symbol day source received_at response_sha256 candle`，保留 OKX `1Dutc` 或 Coinbase 86400 秒日线原始行。 |
+| `trades.json` | `symbol day source received_at stream response_sha256 frame`，保留 OKX `trades-all` 单笔原始消息字段。 |
+| `status.json` | `kind day symbol source start end state received_at response_sha256`。`check` 为在检查前收到的状态，`state` 为有效状态区间，`feed` 为有连续性记录的采集区间，流 ID 记在 `state`。 |
+| `provenance.json` 及原始清单的 `receipts` | `kind symbol source received_at response_sha256`。归一化回执必须出现在原始清单中，每条记录按五字段绑定回执。 |
 
-BTC、ETH 日线来源标签为 `okx:1Dutc`，Coinbase 日线为 `coinbase-exchange:86400`。成交及其连续性来源标签为 `okx:trades-all`。OKX 状态来源标签为 `okx:instrument+system+announcements`，Coinbase 产品状态来源为 `coinbase-exchange:product`。归一化的可交易状态是 OKX `live` 和 Coinbase `online`；停牌、下架、维护或未知状态不允许加仓。公告已知且影响执行窗时要反映在检查状态。
+日期为 YYYY-MM-DD，时间戳为以 `Z` 结束的 UTC，允许微秒精度。OKX 和 Coinbase 日线来源标签分别为 `okx:1Dutc`、`coinbase-exchange:86400`，OKX 逐笔与流标签为 `okx:trades-all`，OKX 和 Coinbase 状态标签分别为 `okx:instrument+system+announcements`、`coinbase-exchange:product`。
 
-托管方保留原始响应、订阅与断线日志、状态和公告记录、接收时钟证据。归一化程序不能从几个状态快照、连续的本地接收记录或 trade ID 算术单独推断完整覆盖。独立审查负责对照原始档案、源清单及覆盖证明，验证回执与归一化值和状态区间的对应关系。候选程序检查归一化文件及回执的一致性；实际采集方式、归一化、连续性证明与托管隔离仍待补充预登记冻结。 [OKX 逐笔成交与标的状态文档](https://tr.okx.com/docs-v5/en/)
+- `check` 的 `start` 必须等于原始回执接收时刻，严格早于该日 01:00，`end` 为 01:00。已知会影响执行窗的停牌或下架应反映在检查状态里。
+- `state` 与 `feed` 的原始回执接收时刻必须在同日且不晚于所证明区间的起点。事后收到的回执不能向前弥补空档。只有原始状态及流日志支持的区间才可进入归一化。事前一次快照或本地没有断线报告，都不足以证明整个区间连续。
+- 补充预登记须把下列比对列为最终揭盲签批前的必检项。隔离批准后，独立审核人逐项核对托管方原始字节、UTC 接收时钟、状态公告、连接和连续性记录、原始清单哈希以及归一化回执。原始回执文件的内容语义与完整归一化过程由独立审核确认。公开清单只提供覆盖和哈希。 [OKX 逐笔成交与标的状态文档](https://tr.okx.com/docs-v5/en/)
 
-## 因果执行
+## 因果执行和覆盖
 
-- 日线必须在收盘后收到且严格早于次日 01:00。使用最早的有效完成记录。缺失、迟到或未完成的日线保持陈旧。
-- 每个标的只考虑 02:00–03:00 内可证明的首笔成交。执行事件在研究时钟上按接收顺序发生；只有同一交易时点且同一接收时点的两笔可共用估值截面。自身状态及成交流须从 02:00 连续覆盖至成交收到。停牌、状态缺口、流中断和无法归属的乱序均阻断相应成交。
-- 另一标的持仓没有当窗已收到的成交价时，新增加仓拒绝成交。空仓标的对当次净值的市值贡献为零，较早的标的可以按当时已证实的状态及流覆盖买入。待退出仓位优先。较晚价格触发的减仓若已错过较早标的首笔，留待下一可成交窗口。
-- 被动组合在当日检查时对两币各预留 50%，分别用各自首笔成交。若只成交一腿，留下账本并标记该基准证据不足。延后或撤销已发生的第一腿需要使用后来才知道的信息。
-- 日末估值使用次日 01:00 前收到的当日收盘价。执行前换手分母使用第一条执行事件之前的资产和现金，另一标的使用当时仍可见的估值。
+- 逐笔的交易所时刻落在已证实的不可交易区间时登记冲突，即使收到时已复牌或该笔并非当日首笔。冲突和证据缺口分别计数，两者均阻断评估。完整证实的停牌区间可没有成交，单独披露。
+- 每标的只考虑 02:00–03:00 内可证明的首笔。仅同一交易时点与接收时点的两笔可共用估值。接收时钟上较晚的首价不能改变较早成交。无充分状态或成交流证明时不成交。另一标的已有仓位且未见其当窗首价时阻断新增敞口。
+- 被动组合为两腿各预留 50%。执行要求及时的 FX 收盘、01:00 前证实的 FX 在线状态及截至接收首笔的连续 FX 状态。单腿成交则保留账本并判基准证据不足。
+- 零持仓腿市值为零，不影响敞口测量。逐日及逐事件账本披露持仓腿的陈旧估值。陈旧价格显示疑似越限时判证据不足。日末按次日 01:00 前收到的当日收盘价估值。
 
-## 检查、审核与一次性评估
+## 受控启动和签批
 
-`commands.json` 记录命令模板。研究侧预检只读清单文件，另两条命令在本候选的审核人、公钥和独立持久路径尚未冻结时拒绝运行。候选无采集、网络或解密入口。
+生产部署尚未授权。研究环境可运行公开清单预检。实际授权前，直接复核及评估默认拒绝。候选没有行情采集或解密入口。
+
+`commands.json` 固定命令模板。补充预登记要记录启动器、命令文件、实现（含该证据说明）、授权 JSON、签批公钥、验签程序绝对路径与版本及哈希、解释器哈希、研究与评估 UID、一次性状态目录。两个签批均包含授权 JSON 的逐字节 SHA-256 及 `profile`。更换上述任何绑定都需要独立复核和新签批。
+
+| 生产绑定 | 配置 |
+| --- | --- |
+| 受控安装 | `/opt/zlin21/v2`，根用户所有且无组或其他用户写权限，独立账户运行 `commands.json` 的隔离命令。 |
+| 信任根 | 根用户所有的 `/etc/zlin21/v2/authority.json` 和 `authority.sha256`，后者为前者原始字节的 SHA-256。 |
+| 解释器及验签 | 固定 `/usr/bin/python3 -I -B` 与 `/usr/bin/openssl`。哈希和 OpenSSL 版本经配置核对，验签进程使用固定环境。 |
+| 一次性标记 | `/var/lib/zlin21/v2`，其父级由根用户控制，目录由独立评估 UID 持有且为 0700。研究 UID 必须与评估 UID 分离。研究账户无需也不得取得托管明文或评估写权限。 |
+
+授权 JSON 必填字段为 `schema profile reviewer_id reviewer_public_key reviewer_key_sha256 revision implementation_sha256 commands_sha256 launcher_sha256 verifier_path verifier_sha256 verifier_version python_path python_sha256 state_directory state_uid research_uid synthetic_now`。生产 `profile=production`、`synthetic_now=null`。模拟模式使用 `profile=synthetic` 的独立信任根、测试时钟与目录，只与同类数据清单和签批兼容。
+
+隔离签批绑定清单、登记、日志和候选版本。独立证据复核输出覆盖或冲突报告。只有同一授权下、绑定该报告的最终签批可运行评估。评估独占创建并同步一次性标记，失败时也保留。两段行情继续封存，实际生产 UID、正式公钥和受控主机由授权后补充预登记确定。
 
 ```bash
 python3 -m research.spot_defense.v2.run inspect MANIFEST MANIFEST_SHA256
 python3 -m pytest tests/test_spot_defense.py tests/test_spot_defense_v2.py -q
 ```
-
-- 在受控环境固定审核人、仅用于签批的 Ed25519 公钥及其 SHA-256、提交、实现文件组合哈希、命令哈希和一次性标记路径。签批密钥与托管数据的加密密钥属于不同用途。候选使用系统 OpenSSL 验签。
-- 评估期结束且最终日线可用性窗口关闭后，隔离签批绑定登记、任务日志、既往暴露审核的摘要和无提前研究访问的结论。签批明确绑定本期清单和冻结版本。证据复核仅在隔离签批后检查原始来源证明及归一化文件，输出无绩效的覆盖摘要。
-- 最终独立签批绑定同一证据清单、隔离签批和覆盖摘要。覆盖不全或实际数据和已签摘要不一致时拒绝评估。评估前独占创建一次性标记，发生失败也保留标记。
