@@ -18,5 +18,9 @@
   "research/ws_replay.py": {
     "archive": "research/legacy_ci_sources/ws_replay.py.txt",
     "sha256": "53f0dc8edcc6fb9ec2718e210c7998b25b5b98b99fd14f83121b1cfde0b922f8"
+  },
+  "tests/test_research_statistics_p2.py": {
+    "archive": "research/legacy_ci_sources/statistics_p2_test.py.txt",
+    "sha256": "e5614bfb6ee9d47cc348b4f36f03f758fe0d2c77c1a55321f68aebbf75a8fa56"
   }
 }

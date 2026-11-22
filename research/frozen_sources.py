@@ -5,7 +5,7 @@ import json
 from .engine import Rejected
 from .execution_audit import sha
 
-LIVE_FREEZE = "research/experiments/SOURCE_FREEZE_R3_V4.json"
+LIVE_FREEZE = "research/experiments/SOURCE_FREEZE_R3_V5.json"
 ORIGINALS = "research/legacy_ci_sources/ORIGINALS.json"
 
 

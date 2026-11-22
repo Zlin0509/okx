@@ -2,6 +2,7 @@
 
 import copy
 import json
+import math
 import pickle
 from dataclasses import FrozenInstanceError, asdict
 from pathlib import Path
@@ -9,14 +10,13 @@ from pathlib import Path
 import pytest
 
 from research.engine import Rejected
-from research.statistics.core import qualified_models
+from research.statistics.core import adjust, config, digest, qualified_models
 from research.statistics.disclosure import check_documents, documents, rw_disclosure
 from research.statistics.fixtures import asof, family, synthetic_series
 from research.statistics.runner import (
     compare,
     evaluation_notes,
     legacy_projection,
-    numerical_reference,
     reproduce,
 )
 
@@ -83,8 +83,18 @@ def test_detached_models_reject_real_or_other_uses(result, usage):
 
 def test_legacy_statistics_permits_and_scalar_model_outputs_are_unchanged(result):
     legacy = json.loads((ROOT / "research/M3B_EXPECTED.json").read_text())
-    compare(numerical_reference(legacy_projection(result)), numerical_reference(legacy))
-    assert json.loads(json.dumps(result["batch"])) == legacy["batch"]
+    actual = json.loads(json.dumps(legacy_projection(result)))
+    for batch in (actual["batch"], legacy["batch"]):
+        # Each digest binds its own exact bytes, which may differ between BLAS kernels.
+        family_sha = batch.pop("family_sha256")
+        assert digest(batch) == family_sha
+    compare(actual, legacy)
+    alpha = config()["alpha"]
+    for candidate, analysis in legacy["batch"]["analyses"].items():
+        for test_id, row in analysis["tests"].items():
+            if ":level:" in test_id:
+                observed = actual["batch"]["analyses"][candidate]["tests"][test_id]["pvalue"]
+                assert (observed <= alpha) == (row["pvalue"] <= alpha), test_id
     assert result["false_positives"] == ["rw_residual"]
     assert result["batch"]["permits"]["rw_residual"]["status"] == "qualified"
 
@@ -107,7 +117,7 @@ def test_both_documents_use_exact_machine_values_and_detect_drift(result, tmp_pa
     assert "`0.028988937192896705`" in disclosure
     assert "`0.03551144806129846`" in disclosure
     assert "0.03865" not in disclosure
-    assert result["batch"]["adjustments"] == expected["batch"]["adjustments"]
+    compare(result["batch"]["adjustments"], expected["batch"]["adjustments"], "result/batch/adjustments")
     (tmp_path / "research").mkdir()
     for name, content in documents(expected).items():
         assert disclosure in content
@@ -118,3 +128,23 @@ def test_both_documents_use_exact_machine_values_and_detect_drift(result, tmp_pa
     with pytest.raises(Rejected) as caught:
         check_documents(tmp_path, expected)
     assert caught.value.code == "disclosure_mismatch"
+
+
+def test_numeric_tolerance_cannot_hide_a_threshold_crossing_or_missing_member():
+    alpha = config()["alpha"]
+    below = math.nextafter(alpha, 0.0)
+    above = math.nextafter(alpha, 1.0)
+    at = adjust({"eg": {"pvalue": alpha}}, ("eg",))
+    on_same_side = adjust({"eg": {"pvalue": below}}, ("eg",))
+    crossed = adjust({"eg": {"pvalue": above}}, ("eg",))
+    assert at["eg"]["reject_null"] is True
+    assert crossed["eg"]["reject_null"] is False
+    compare(on_same_side, at)
+    compare(crossed["eg"]["adjusted_p"], at["eg"]["adjusted_p"])
+    with pytest.raises(Rejected) as error:
+        compare(crossed, at)
+    assert error.value.code == "discrete_mismatch"
+    assert str(error.value) == "result/eg/reject_null"
+    with pytest.raises(Rejected) as error:
+        compare({}, at)
+    assert error.value.code == "schema_mismatch"
