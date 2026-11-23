@@ -1,4 +1,5 @@
 import hashlib
+import os
 import shutil
 import sqlite3
 import stat
@@ -8,8 +9,12 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
+
+with patch.object(sys, "path", [str(PROJECT_DIR), *sys.path]):
+    import offline_store
 
 
 class CLITests(unittest.TestCase):
@@ -145,12 +150,93 @@ class CLITests(unittest.TestCase):
         self.source.write_text("{}", encoding="utf-8")
         with closing(sqlite3.connect(self.db)) as db:
             db.execute("CREATE TABLE unrelated (id INT)")
+        self.db.chmod(0o600)
         before = self.db.read_bytes()
         result = self.run_report("--as-of", "2026-11-23", "--sport", "running")
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, "")
         self.assertIn("专用 SQLite", result.stderr)
         self.assertEqual(self.db.read_bytes(), before)
+
+    def assert_database_rejected(self, reason):
+        self.source.write_bytes(b"{}\n")
+        result = self.run_report("--as-of", "2026-11-23", "--sport", "cycling")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertIn(reason, result.stderr)
+        self.assertEqual(self.source.read_bytes(), b"{}\n")
+        for suffix in ("-journal", "-wal", "-shm"):
+            self.assertFalse(Path(f"{self.db}{suffix}").exists())
+
+    def test_refuses_database_with_group_or_other_permissions(self):
+        self.db.touch()
+        for mode in (0o644, 0o640, 0o604, 0o660):
+            with self.subTest(mode=oct(mode)):
+                self.db.chmod(mode)
+                self.assert_database_rejected("数据库文件权限过宽")
+                self.assertEqual(self.db.read_bytes(), b"")
+                self.assertEqual(stat.S_IMODE(self.db.stat().st_mode), mode)
+
+    def test_refuses_symlink_to_existing_private_database(self):
+        target = self.workdir / "target.sqlite3"
+        target.touch(mode=0o600)
+        self.db.symlink_to(target)
+        self.assert_database_rejected("须为常规文件")
+        self.assertEqual(self.db.readlink(), target)
+        self.assertEqual(target.read_bytes(), b"")
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+
+    def test_refuses_dangling_database_symlink_without_creating_target(self):
+        target = self.workdir / "missing.sqlite3"
+        self.db.symlink_to(target)
+        self.assert_database_rejected("须为常规文件")
+        self.assertEqual(self.db.readlink(), target)
+        self.assertFalse(target.exists())
+
+    def test_refuses_non_regular_database(self):
+        self.db.mkdir()
+        self.assert_database_rejected("须为常规文件")
+        self.assertEqual(list(self.db.iterdir()), [])
+
+    def test_refuses_database_owned_by_another_user_before_sqlite_connect(self):
+        self.db.touch(mode=0o600)
+        with (
+            patch.object(offline_store.os, "geteuid", return_value=self.db.stat().st_uid + 1),
+            patch.object(offline_store.sqlite3, "connect") as connect,
+            self.assertRaisesRegex(ValueError, "数据库文件须由当前用户拥有"),
+        ):
+            offline_store.open_database(self.db)
+        connect.assert_not_called()
+        self.assertEqual(self.db.read_bytes(), b"")
+
+    def test_closes_connection_if_database_identity_changes_during_open(self):
+        replacement = self.workdir / "replacement.sqlite3"
+        for path in (self.db, replacement):
+            path.touch(mode=0o600)
+        file_stats = (self.db.lstat(), replacement.lstat())
+        with (
+            patch.object(Path, "lstat", side_effect=file_stats),
+            patch.object(offline_store.sqlite3, "connect") as connect,
+            self.assertRaisesRegex(ValueError, "数据库文件在打开时发生变化"),
+        ):
+            offline_store.open_database(self.db)
+        connect.return_value.execute.assert_not_called()
+        connect.return_value.close.assert_called_once_with()
+
+    def test_new_database_is_0600_with_restrictive_umask(self):
+        previous_umask = os.umask(0o777)
+        try:
+            with closing(offline_store.open_database(self.db)):
+                self.assertEqual(stat.S_IMODE(self.db.stat().st_mode), 0o600)
+        finally:
+            os.umask(previous_umask)
+
+    def test_database_path_with_uri_reserved_characters(self):
+        self.db = self.workdir / "report ?#%.sqlite3"
+        self.source.write_text("{}", encoding="utf-8")
+        result = self.run_report("--as-of", "2026-11-23", "--sport", "cycling")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(stat.S_IMODE(self.db.stat().st_mode), 0o600)
 
     def test_render_failure_rolls_back_import(self):
         self.source.write_text("{}", encoding="utf-8")

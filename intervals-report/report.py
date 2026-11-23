@@ -18,12 +18,12 @@ def _hours(seconds):
     return f"{seconds / 3600:.2f} 小时"
 
 
-def _period_total(activities, field, format_total):
-    values = [row[field] for row in activities if row[field] is not None]
+def _period_total(measurements, format_total, sum_values=sum):
+    values = [value for value in measurements if value is not None]
     if not values:
         return MISSING
-    total = math.fsum(values) if field == "tss" else sum(values)
-    coverage = f"{len(values)}/{len(activities)} 条有数据"
+    total = sum_values(values)
+    coverage = f"{len(values)}/{len(measurements)} 条有数据"
     return f"{format_total(total)}（{coverage}）"
 
 
@@ -57,13 +57,8 @@ def _change(current, baseline, digits):
     return f"{current - baseline:+.{digits}f}"
 
 
-def _fitness_metrics(ftp_row, wellness, args):
-    weight_row = next((row for row in reversed(wellness) if row["weight_kg"] is not None), None)
-    ftp = ftp_row["ftp_w"] if ftp_row is not None else None
-    weight = weight_row["weight_kg"] if weight_row is not None else None
-    ftp_day = ftp_row["day"] if ftp_row is not None else MISSING
-    weight_day = weight_row["day"] if weight_row is not None else MISSING
-    values = {"metric_dates": f"FTP 日期 {ftp_day}，体重日期 {weight_day}"}
+def _fitness_metrics(ftp, weight, args):
+    values = {}
     for key, current, baseline, digits in (
         ("ftp", ftp, args.baseline_ftp_w, 1),
         ("weight", weight, args.baseline_weight_kg, 1),
@@ -86,17 +81,24 @@ def _fitness_metrics(ftp_row, wellness, args):
         values["progress_summary"] = f"最新 FTP {ftp:.1f} W，未提供比较基线"
     else:
         values["progress_summary"] = f"最新 FTP {ftp:.1f} W，较所填基线变化 {values['ftp_change']} W"
-    return ftp, values
+    return values
 
 
-def _zone_seconds(histograms, ftp):
+def _zone_seconds(power_seconds, ftp):
     zones = [0] * 5
-    for histogram in histograms:
-        for power, seconds in histogram.items():
-            scaled_watts = int(power) * 100
-            index = sum(scaled_watts > ftp * limit for limit in ZONE_LIMITS)
-            zones[index] += seconds
+    for watts, seconds in power_seconds:
+        index = sum(watts * 100 > ftp * limit for limit in ZONE_LIMITS)
+        zones[index] += seconds
     return zones
+
+
+def _zone_metrics(zones):
+    sampled_seconds = sum(zones)
+    values = {}
+    for i, seconds in enumerate(zones, 1):
+        values[f"z{i}_duration"] = f"{seconds} 秒" if sampled_seconds else MISSING
+        values[f"z{i}_share"] = f"{seconds / sampled_seconds:.1%}" if sampled_seconds else MISSING
+    return values
 
 
 def _intensity(week, ftp, cycling_selected):
@@ -117,18 +119,24 @@ def _intensity(week, ftp, cycling_selected):
             if duration:
                 summary += f"占已导入骑行时长的 {sampled_seconds / duration:.1%}。"
 
-    values = {"zone_coverage": summary, "zone_ftp": _metric(ftp) if cycling_selected else "不适用"}
-    zones = _zone_seconds(histograms, ftp) if ftp is not None and sampled_seconds else [None] * 5
-    for i, seconds in enumerate(zones, 1):
-        values[f"z{i}_duration"] = MISSING if seconds is None else f"{seconds} 秒"
-        values[f"z{i}_share"] = MISSING if seconds is None else f"{seconds / sampled_seconds:.1%}"
-    return values
+    samples = ((int(power), seconds) for histogram in histograms for power, seconds in histogram.items())
+    zones = (
+        _zone_seconds(samples, ftp) if cycling_selected and ftp is not None and sampled_seconds else [0] * 5
+    )
+    return {
+        "zone_coverage": summary,
+        "zone_ftp": _metric(ftp) if cycling_selected else "不适用",
+        **_zone_metrics(zones),
+    }
+
+
+def _report_bounds(as_of):
+    monday = as_of - timedelta(days=as_of.weekday())
+    return monday.isoformat(), as_of.replace(day=1).isoformat(), as_of.isoformat()
 
 
 def render_report(db, sha256, args, template):
-    end = args.as_of.isoformat()
-    week_start = (args.as_of - timedelta(days=args.as_of.weekday())).isoformat()
-    month_start = args.as_of.replace(day=1).isoformat()
+    week_start, month_start, end = _report_bounds(args.as_of)
     first_day = min(week_start, month_start)
     activities = db.execute(
         "SELECT * FROM activities WHERE sha256 = ? AND day BETWEEN ? AND ?",
@@ -144,9 +152,14 @@ def render_report(db, sha256, args, template):
     ftp_row = db.execute(
         "SELECT * FROM ftp_history WHERE sha256 = ? AND day <= ? ORDER BY day DESC LIMIT 1", (sha256, end)
     ).fetchone()
-    ftp, fitness = _fitness_metrics(ftp_row, wellness, args)
+    weight_row = next((row for row in reversed(wellness) if row["weight_kg"] is not None), None)
+    ftp = ftp_row["ftp_w"] if ftp_row is not None else None
+    weight = weight_row["weight_kg"] if weight_row is not None else None
+    ftp_day = ftp_row["day"] if ftp_row is not None else MISSING
+    weight_day = weight_row["day"] if weight_row is not None else MISSING
+    fitness = _fitness_metrics(ftp, weight, args)
     trends = _load_trends(wellness, first_day)
-    weekly_tss = _period_total(week, "tss", _metric)
+    weekly_tss = _period_total([row["tss"] for row in week], _metric, math.fsum)
     missing_inputs = []
     if not week:
         missing_inputs.append("本周训练记录")
@@ -168,11 +181,12 @@ def render_report(db, sha256, args, template):
         "risk_summary": "缺少负荷趋势数据，风险未评估" if trends == MISSING else "负荷趋势见下表，风险未评估",
         "next_week_summary": advice_status,
         "next_week_recommendations": advice,
-        "weekly_duration": _period_total(week, "duration_seconds", _hours),
-        "monthly_duration": _period_total(month, "duration_seconds", _hours),
+        "weekly_duration": _period_total([row["duration_seconds"] for row in week], _hours),
+        "monthly_duration": _period_total([row["duration_seconds"] for row in month], _hours),
         "weekly_tss": weekly_tss,
-        "monthly_tss": _period_total(month, "tss", _metric),
+        "monthly_tss": _period_total([row["tss"] for row in month], _metric, math.fsum),
         "load_trends": trends,
+        "metric_dates": f"FTP 日期 {ftp_day}，体重日期 {weight_day}",
         **fitness,
         **_intensity(week, ftp, "cycling" in sports),
     }

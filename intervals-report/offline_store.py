@@ -3,6 +3,7 @@ import json
 import math
 import os
 import sqlite3
+import stat
 from datetime import date
 from pathlib import Path
 
@@ -172,12 +173,40 @@ def read_source(path):
     return raw, activities, wellness, ftp
 
 
+def _check_database_file(info):
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("数据库须为常规文件，不能是符号链接")
+    if info.st_uid != os.geteuid():
+        raise ValueError("数据库文件须由当前用户拥有")
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        raise ValueError("数据库文件权限过宽，请将权限设为 0600")
+
+
 def open_database(path: Path):
+    if os.name != "posix":
+        raise ValueError("数据库文件权限校验需要 POSIX 系统")
     try:
-        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_WRONLY, 0o600)
     except FileExistsError:
-        pass
-    db = sqlite3.connect(path)
+        expected = path.lstat()
+    else:
+        try:
+            os.fchmod(fd, 0o600)
+            expected = os.fstat(fd)
+        finally:
+            os.close(fd)
+    _check_database_file(expected)
+
+    # SQLite opens by pathname. Disallow implicit creation and recheck before running SQL.
+    db = sqlite3.connect(f"{path.absolute().as_uri()}?mode=rw", uri=True)
+    try:
+        current = path.lstat()
+        _check_database_file(current)
+        if not os.path.samestat(expected, current):
+            raise ValueError("数据库文件在打开时发生变化")
+    except (OSError, ValueError):
+        db.close()
+        raise
     db.row_factory = sqlite3.Row
     return db
 
