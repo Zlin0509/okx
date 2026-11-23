@@ -1,6 +1,7 @@
 # 训练分析报告
 
 - 报告周期：{{report_period}}
+- 运动范围：{{sport_scope}}
 - 数据覆盖：{{data_coverage}}
 
 ## 本周结论
@@ -17,7 +18,9 @@
 | 训练时长 | {{weekly_duration}} | {{monthly_duration}} |
 | TSS 合计 | {{weekly_tss}} | {{monthly_tss}} |
 
-- CTL、ATL、TSB 走势：{{load_trends}}
+CTL、ATL、TSB 为导入的个人负荷指标，不按运动筛选。
+
+{{load_trends}}
 
 ## FTP、体重与目标差距
 
@@ -28,21 +31,24 @@
 | 相对功率（W/kg） | {{baseline_w_per_kg}} | {{current_w_per_kg}} | {{w_per_kg_change}} |
 
 - 训练目标与当前差距：{{goal_gap}}
+- 当前值来源：{{metric_dates}}
 
 ## 骑行强度分布
 
 分区使用的 FTP（W）：{{zone_ftp}}
 
+{{zone_coverage}}
+
+按当前 FTP 划分，时长占比以有功率样本的秒数为分母。
+
 | 功率区间 | 时长 | 占比 |
 | --- | --- | --- |
-| Z1 | {{z1_duration}} | {{z1_share}} |
-| Z2 | {{z2_duration}} | {{z2_share}} |
-| Z3 | {{z3_duration}} | {{z3_share}} |
-| Z4 | {{z4_duration}} | {{z4_share}} |
-| Z5 | {{z5_duration}} | {{z5_share}} |
+| Z1（≤55%） | {{z1_duration}} | {{z1_share}} |
+| Z2（>55% 至 75%） | {{z2_duration}} | {{z2_share}} |
+| Z3（>75% 至 90%） | {{z3_duration}} | {{z3_share}} |
+| Z4（>90% 至 105%） | {{z4_duration}} | {{z4_share}} |
+| Z5（>105%） | {{z5_duration}} | {{z5_share}} |
 
 ## 下周训练建议
-
-<!-- 填写 1–3 条建议，每条包含目标功率和持续时间。 -->
 
 {{next_week_recommendations}}
